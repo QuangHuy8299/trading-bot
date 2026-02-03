@@ -1,0 +1,60 @@
+{
+  "name": "tk-trading-decision-support",
+  "version": "1.0.0",
+  "description": "TK Trading Decision Support System - A semi-automated trading framework providing context-driven permission states for human decision-making",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:dev": "ts-node src/index.ts",
+    "dev": "nodemon --exec ts-node src/index.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "health-check": "ts-node scripts/health-check.ts",
+    "kill-switch": "ts-node scripts/kill-switch.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean"
+  },
+  "keywords": [
+    "trading",
+    "decision-support",
+    "binance",
+    "telegram",
+    "cryptocurrency"
+  ],
+  "author": "TK Trading Team",
+  "license": "PROPRIETARY",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "binance-api-node": "^0.12.8",
+    "dotenv": "^16.3.1",
+    "ioredis": "^5.3.2",
+    "node-telegram-bot-api": "^0.64.0",
+    "uuid": "^9.0.1",
+    "winston": "^3.11.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.6",
+    "@types/node-telegram-bot-api": "^0.64.1",
+    "@types/uuid": "^9.0.7",
+    "@typescript-eslint/eslint-plugin": "^6.16.0",
+    "@typescript-eslint/parser": "^6.16.0",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
+    "prettier": "^3.1.1",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

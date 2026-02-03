@@ -1,0 +1,120 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# TK Trading Decision Support System - Docker Compose
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Usage:
+#   Development: docker-compose up -d
+#   Production:  docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# ⚠️  IMPORTANT: Always verify EXECUTION_ENABLED=false before starting
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+version: '3.8'
+
+services:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Main Application
+  # ─────────────────────────────────────────────────────────────────────────────
+  tk-trading-system:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: tk-trading-system
+    restart: unless-stopped
+    
+    # CRITICAL SAFETY: These defaults ensure execution is disabled
+    environment:
+      - NODE_ENV=production
+      - EXECUTION_ENABLED=false
+      - AUTO_PROTECT_GLOBALLY_ENABLED=false
+      - LOG_LEVEL=info
+      - REDIS_URL=redis://redis:6379
+    
+    # Load additional config from .env file
+    env_file:
+      - ../.env
+    
+    # Persistent logs
+    volumes:
+      - ../logs:/app/logs:rw
+    
+    # Dependencies
+    depends_on:
+      redis:
+        condition: service_healthy
+    
+    # Networking
+    networks:
+      - tk-network
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    
+    # Logging
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Redis (State Persistence & Rate Limiting)
+  # ─────────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: tk-redis
+    restart: unless-stopped
+    
+    # Persistence
+    command: redis-server --appendonly yes --appendfsync everysec
+    
+    # Data volume
+    volumes:
+      - redis-data:/data
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+    # Networking
+    networks:
+      - tk-network
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+    
+    # Logging
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Volumes
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  redis-data:
+    driver: local
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  tk-network:
+    driver: bridge
