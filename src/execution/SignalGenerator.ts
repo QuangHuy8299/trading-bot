@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { TradeDirectionEngine } from './TradeDirectionEngine';
 import { RiskEngine } from './RiskEngine';
-import { RiskConfig, TradeSuggestion } from '@/types/execution.types';
-import { GateEvaluationResult, PermissionAssessment, PermissionState } from '@/types';
+import { RiskConfig, TradeSuggestion } from '../types/execution.types';
+import { GateEvaluationResult, PermissionAssessment, PermissionState } from '../types';
 
 export class SignalGenerator {
   private directionEngine: TradeDirectionEngine;

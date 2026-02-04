@@ -190,6 +190,30 @@ export class TelegramNotifier {
   }
 
   /**
+   * Send order executed notification (T1: INFO)
+   */
+  async sendOrderExecuted(suggestion: any, result: any): Promise<void> {
+    const message = this.templates.orderExecuted(suggestion, result);
+    await this.send(message, MESSAGE_TIERS.T1_INFO);
+  }
+
+  /**
+   * Send order pending confirmation request (T3: ALERT)
+   */
+  async sendOrderPending(orderId: string, suggestion: any, expiresAt: Date): Promise<void> {
+    const message = this.templates.orderPending(orderId, suggestion, expiresAt);
+    await this.send(message, MESSAGE_TIERS.T3_ALERT);
+  }
+
+  /**
+   * Send order expired notification (T2: WARNING)
+   */
+  async sendOrderExpired(orderId: string): Promise<void> {
+    const message = this.templates.orderExpired(orderId);
+    await this.send(message, MESSAGE_TIERS.T2_WARNING);
+  }
+
+  /**
    * Send to a specific chat (for direct replies)
    */
   async sendToChat(chatId: number | string, message: string): Promise<void> {

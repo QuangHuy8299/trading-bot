@@ -9,7 +9,8 @@ import { GateEvaluator } from '../../core/gate-evaluator/GateEvaluator';
 import { PermissionStateEngine } from '../../core/permission-engine/PermissionStateEngine';
 import { PermissionAssessment, PermissionState } from '../../types/permission.types';
 import { formatPermissionState, formatGateStatus, formatTimestamp } from '../../utils/formatters';
-import { log } from '../../utils/logger'; // Thêm logger để debug lỗi
+import { log } from '../../utils/logger';
+import { OrderExecutionService } from '../../execution/OrderExecutionService';
 
 /**
  * CommandHandler processes Telegram commands.
@@ -22,19 +23,22 @@ export class CommandHandler {
   private dataCollector: DataCollector;
   private gateEvaluator: GateEvaluator;
   private permissionEngine: PermissionStateEngine;
+  private orderExecutionService?: OrderExecutionService;
 
   constructor(
     auditLogger: AuditLogger,
     safetyManager: SafetyManager,
     dataCollector: DataCollector,
     gateEvaluator: GateEvaluator,
-    permissionEngine: PermissionStateEngine
+    permissionEngine: PermissionStateEngine,
+    orderExecutionService?: OrderExecutionService
   ) {
     this.auditLogger = auditLogger;
     this.safetyManager = safetyManager;
     this.dataCollector = dataCollector;
     this.gateEvaluator = gateEvaluator;
     this.permissionEngine = permissionEngine;
+    this.orderExecutionService = orderExecutionService;
   }
 
   /**
@@ -236,16 +240,60 @@ reason: Permission downgraded to WAIT
   /**
    * Handle /confirm command
    */
-  private handleConfirm(orderId?: string, traderId?: string): string {
+  private async handleConfirm(orderId?: string, traderId?: string): Promise<string> {
     if (!orderId) {
-      return 'No pending orders to confirm.\nUse /confirm ORDER_ID to confirm a specific order.';
+      // Show all pending orders
+      if (!this.orderExecutionService) {
+        return 'Order execution service not available.';
+      }
+
+      const pendingOrders = this.orderExecutionService.getPendingOrders();
+
+      if (pendingOrders.length === 0) {
+        return 'No pending orders to confirm.';
+      }
+
+      const ordersList = pendingOrders.map(order => {
+        const minutesLeft = Math.round((order.expiresAt.getTime() - Date.now()) / 60000);
+        return `• ${order.id.slice(0, 8)} - ${order.suggestion.asset} ${order.suggestion.direction} (expires in ${minutesLeft}m)`;
+      }).join('\n');
+
+      return `<b>Pending Orders:</b>\n\n${ordersList}\n\nUse /confirm ORDER_ID to confirm a specific order.`;
     }
 
-    if (!env.EXECUTION_ENABLED) {
+    if (!env.EXECUTION_ENABLED && !env.AUTO_ENTRY_ENABLED) {
       return '⚠️ Execution is DISABLED.\nCannot confirm orders in suggestion-only mode.';
     }
 
-    return `Order confirmation requires full module integration.\nOrder ID: ${orderId}`;
+    if (!this.orderExecutionService) {
+      return '⚠️ Order execution service not available.';
+    }
+
+    // Find matching order (partial ID match)
+    const pendingOrders = this.orderExecutionService.getPendingOrders();
+    const matchingOrder = pendingOrders.find(order => order.id.startsWith(orderId));
+
+    if (!matchingOrder) {
+      return `⚠️ Order not found: ${orderId}\n\nUse /confirm without ID to see pending orders.`;
+    }
+
+    // Execute the order
+    try {
+      const result = await this.orderExecutionService.confirmOrder(matchingOrder.id);
+
+      if (!result) {
+        return `⚠️ Failed to confirm order ${orderId}.\nOrder may have expired or already been confirmed.`;
+      }
+
+      if (!result.success) {
+        return `❌ Order execution failed: ${result.error}\n\nPlease check logs for details.`;
+      }
+
+      return `✅ Order confirmed and executed!\n\nEntry Order ID: ${result.entryOrder.orderId}\nStatus: ${result.entryOrder.status}\n\nCheck your exchange for full details.`;
+    } catch (error) {
+      log.error('Error confirming order', { orderId, error });
+      return `❌ Error confirming order: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
   }
 
   /**
@@ -253,10 +301,29 @@ reason: Permission downgraded to WAIT
    */
   private handleCancel(orderId?: string, traderId?: string): string {
     if (!orderId) {
-      return 'Usage: /cancel ORDER_ID';
+      return 'Usage: /cancel ORDER_ID\n\nUse /confirm to see pending orders.';
     }
 
-    return `Order cancellation requires full module integration.\nOrder ID: ${orderId}`;
+    if (!this.orderExecutionService) {
+      return '⚠️ Order execution service not available.';
+    }
+
+    // Find matching order (partial ID match)
+    const pendingOrders = this.orderExecutionService.getPendingOrders();
+    const matchingOrder = pendingOrders.find(order => order.id.startsWith(orderId));
+
+    if (!matchingOrder) {
+      return `⚠️ Order not found: ${orderId}\n\nUse /confirm to see pending orders.`;
+    }
+
+    // Cancel the order
+    const cancelled = this.orderExecutionService.cancelOrder(matchingOrder.id);
+
+    if (cancelled) {
+      return `✅ Order ${orderId} cancelled successfully.`;
+    } else {
+      return `⚠️ Failed to cancel order ${orderId}.`;
+    }
   }
 
   /**

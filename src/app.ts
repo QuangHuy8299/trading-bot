@@ -18,6 +18,9 @@ import type { PermissionAssessment } from './types/permission.types';
 import { PermissionState } from './types/permission.types';
 import { GateStatus } from './types/gates.types';
 import { MarketData as CollectorMarketData } from './core/data-collector/types';
+import { OrderExecutionService } from './execution/OrderExecutionService';
+import { BinanceExecutor } from './execution/BinanceExecutor';
+import { RiskConfig } from './types/execution.types';
 
 // Type definitions for assessments
 interface AssessmentMarketData {
@@ -57,6 +60,7 @@ export class App extends EventEmitter {
   private permissionEngine!: PermissionStateEngine;
   private telegramBot!: TelegramBot;
   private marketScanner!: MarketScanner;
+  private orderExecutionService!: OrderExecutionService;
 
   // Track last assessment for change detection
   private lastAssessments: Map<string, Assessment> = new Map();
@@ -127,8 +131,21 @@ export class App extends EventEmitter {
 
       // Initialize execution layer
       log.debug('Initializing execution layer...');
-      // this.orderService = new OrderPreparationService(...);
-      // this.executionController = new ExecutionController(...);
+
+      // Create RiskConfig from environment
+      const riskConfig: RiskConfig = {
+        accountBalance: 0, // Will be fetched dynamically from Binance
+        riskPerTradePercent: env.RISK_PER_TRADE_PERCENT,
+        rewardRatio: env.RISK_REWARD_RATIO,
+        maxLeverage: env.MAX_LEVERAGE,
+        defaultStopLossPercent: env.DEFAULT_STOP_LOSS_PERCENT,
+      };
+
+      // Initialize BinanceExecutor and OrderExecutionService
+      const binanceConnector = this.dataCollector.getBinanceConnector();
+      const executor = new BinanceExecutor(binanceConnector);
+      this.orderExecutionService = new OrderExecutionService(executor, riskConfig);
+
       log.info('✓ Execution layer initialized');
 
       // Initialize interaction layer
@@ -138,7 +155,8 @@ export class App extends EventEmitter {
         this.safetyManager,
         this.dataCollector,
         this.gateEvaluator,
-        this.permissionEngine
+        this.permissionEngine,
+        this.orderExecutionService
       );
       this.telegramBot = new TelegramBot(commandHandler, this.auditLogger);
       log.info('✓ Interaction layer initialized');
@@ -185,8 +203,9 @@ export class App extends EventEmitter {
       // Start scanner loop if enabled
       if (SCANNER_CONFIG.ENABLE_AUTO_SCAN) {
         this.startScannerLoop();
-        log.info('✓ Scanner loop started');
+        log.info(`✓ Scanner loop started (interval: ${SCANNER_CONFIG.SCANNER_INTERVAL_MS / 60000} minutes)`);
       } else {
+        log.warn('⚠️ Scanner loop DISABLED - Set ENABLE_AUTO_SCAN=true in .env to enable');
         log.info('✓ Scanner loop disabled (ENABLE_AUTO_SCAN=false)');
       }
 
@@ -206,6 +225,8 @@ export class App extends EventEmitter {
       console.log(
         `  Auto-Protect:     ${env.AUTO_PROTECT_GLOBALLY_ENABLED ? 'ENABLED ⚠️' : 'DISABLED ✓'}`
       );
+      console.log(`  Auto-Entry:       ${env.AUTO_ENTRY_ENABLED ? `ENABLED (${env.AUTO_ENTRY_MODE}) ⚠️` : 'DISABLED ✓'}`);
+      console.log(`  TP/SL Mode:       ${env.AUTO_ENTRY_ENABLED ? env.TPSL_MODE : 'N/A'}`);
       console.log(`  Binance:          ${env.BINANCE_TESTNET ? 'TESTNET ✓' : 'LIVE ⚠️'}`);
       console.log(`  Tracked Assets:   ${env.TRACKED_ASSETS.join(', ')}`);
       console.log('');
@@ -311,13 +332,20 @@ export class App extends EventEmitter {
    * Run a single scanner cycle
    */
   private async runScannerCycle(): Promise<void> {
-    log.debug('Running scanner cycle...');
+    log.info('Running scanner cycle...');
 
     try {
       const notifier = this.telegramBot.getNotifier();
       
+      if (!notifier) {
+        log.warn('Telegram notifier not available, cannot send scanner notifications');
+      }
+      
       // Scan top assets
+      log.info(`Scanning for top ${SCANNER_CONFIG.MAX_ACTIVE_ASSETS} assets...`);
       const topAssets = await this.marketScanner.scanTopAssets(SCANNER_CONFIG.MAX_ACTIVE_ASSETS);
+
+      log.info(`Scanner completed. Found ${topAssets.length} assets: ${topAssets.length > 0 ? topAssets.join(', ') : 'NONE'}`);
 
       if (topAssets.length === 0) {
         log.warn('Scanner returned no assets, keeping current watchlist');
@@ -327,18 +355,29 @@ export class App extends EventEmitter {
         const shouldNotify = !this.lastScannerNoAssetsNotification || 
           (now.getTime() - this.lastScannerNoAssetsNotification.getTime()) >= 60 * 60 * 1000; // 1 hour
 
+        log.info(`Notification check: shouldNotify=${shouldNotify}, notifier=${!!notifier}, lastNotification=${this.lastScannerNoAssetsNotification?.toISOString() || 'never'}`);
+
         if (shouldNotify && notifier) {
           try {
+            log.info('Sending notification: No tradeable pairs found');
             await notifier.sendScannerNotification('NO_ASSETS', {
               reason: 'No assets met minimum volume threshold ($50M) or scoring criteria',
             });
             this.lastScannerNoAssetsNotification = now;
-            log.info('Sent notification: No tradeable pairs found');
+            log.info('✅ Successfully sent notification: No tradeable pairs found');
           } catch (notifyError) {
-            log.error('Failed to send scanner notification', { error: notifyError });
+            log.error('❌ Failed to send scanner notification', { 
+              error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+              stack: notifyError instanceof Error ? notifyError.stack : undefined
+            });
           }
-        } else if (!shouldNotify) {
-          log.debug('Skipping notification (rate limited - last sent less than 1 hour ago)');
+        } else {
+          if (!shouldNotify) {
+            log.info(`⏭️ Skipping notification (rate limited - last sent ${Math.round((now.getTime() - (this.lastScannerNoAssetsNotification?.getTime() || 0)) / 60000)} minutes ago)`);
+          }
+          if (!notifier) {
+            log.warn('⚠️ Cannot send notification: Telegram notifier not available');
+          }
         }
         
         return;
@@ -368,21 +407,31 @@ export class App extends EventEmitter {
       // Emit event for other listeners
       this.emit('watchlist:updated', { assets: topAssets });
     } catch (error) {
-      log.error('Error in scanner cycle', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      log.error('❌ Error in scanner cycle', {
+        error: errorMsg,
+        stack: errorStack,
       });
       
       // Notify on scanner errors
       const notifier = this.telegramBot.getNotifier();
       if (notifier) {
         try {
+          log.info('Sending scanner error notification...');
           await notifier.sendSystemCritical(
             'SCANNER ERROR',
-            `Scanner cycle failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\nSystem will retry on next cycle.`
+            `Scanner cycle failed: ${errorMsg}\n\nSystem will retry on next cycle.`
           );
+          log.info('✅ Scanner error notification sent');
         } catch (notifyError) {
-          log.error('Failed to send scanner error notification', { error: notifyError });
+          log.error('❌ Failed to send scanner error notification', { 
+            error: notifyError instanceof Error ? notifyError.message : String(notifyError)
+          });
         }
+      } else {
+        log.warn('⚠️ Cannot send scanner error notification: Telegram notifier not available');
       }
     }
   }
@@ -491,7 +540,17 @@ export class App extends EventEmitter {
         await this.notifyStateChange(asset, internalAssessment, lastAssessment, assessment);
       }
 
-      // 8. Emit event for other listeners (internal only, no Telegram noise)
+      // 8. Process signal through OrderExecutionService (if auto-entry enabled)
+      if (env.AUTO_ENTRY_ENABLED && this.orderExecutionService) {
+        await this.orderExecutionService.processSignal(
+          asset,
+          data.price,
+          gateResult,
+          assessment
+        );
+      }
+
+      // 9. Emit event for other listeners (internal only, no Telegram noise)
       this.emit('asset:evaluated', internalAssessment);
 
       log.debug(`Completed evaluation for ${asset}`, {
@@ -697,6 +756,62 @@ export class App extends EventEmitter {
         permission: assessment.permission,
       });
     });
+
+    // Handle order execution events
+    if (this.orderExecutionService) {
+      // Order executed (AUTO mode)
+      this.orderExecutionService.on('order:executed', (payload: any) => {
+        log.info('Order executed successfully', payload);
+        const notifier = this.telegramBot.getNotifier();
+        if (notifier) {
+          void notifier.sendOrderExecuted(payload.suggestion, payload.result);
+        }
+      });
+
+      // Order pending confirmation (SAFE mode)
+      this.orderExecutionService.on('order:pending', (payload: any) => {
+        log.info('Order pending confirmation', payload);
+        const notifier = this.telegramBot.getNotifier();
+        if (notifier) {
+          void notifier.sendOrderPending(payload.orderId, payload.suggestion, payload.expiresAt);
+        }
+      });
+
+      // Order confirmed
+      this.orderExecutionService.on('order:confirmed', (payload: any) => {
+        log.info('Order confirmed and executed', payload);
+        const notifier = this.telegramBot.getNotifier();
+        if (notifier) {
+          void notifier.sendOrderExecuted(payload.suggestion, payload.result);
+        }
+      });
+
+      // Order failed
+      this.orderExecutionService.on('order:failed', (payload: any) => {
+        log.error('Order execution failed', payload);
+        const notifier = this.telegramBot.getNotifier();
+        if (notifier) {
+          void notifier.sendSystemCritical(
+            'ORDER EXECUTION FAILED',
+            `Asset: ${payload.suggestion?.asset}\nError: ${payload.error}`
+          );
+        }
+      });
+
+      // Order expired
+      this.orderExecutionService.on('order:expired', (payload: any) => {
+        log.info('Order expired without confirmation', payload);
+        const notifier = this.telegramBot.getNotifier();
+        if (notifier) {
+          void notifier.sendOrderExpired(payload.orderId);
+        }
+      });
+
+      // Order cancelled
+      this.orderExecutionService.on('order:cancelled', (payload: any) => {
+        log.info('Order cancelled', payload);
+      });
+    }
 
     log.debug('Event handlers configured');
   }

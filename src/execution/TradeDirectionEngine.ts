@@ -1,5 +1,5 @@
-import { GateEvaluationResult } from '@/types';
-import { TradeDirection } from '@/types/execution.types';
+import { GateEvaluationResult } from '../types';
+import { TradeDirection } from '../types/execution.types';
 
 export class TradeDirectionEngine {
   determine(gates: GateEvaluationResult): TradeDirection {

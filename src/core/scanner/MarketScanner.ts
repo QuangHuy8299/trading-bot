@@ -77,6 +77,13 @@ export class MarketScanner {
       // Filter and score assets
       const scoredAssets = this.scoreAssets(tickers);
 
+      log.info(`Scored ${scoredAssets.length} assets after filtering (from ${tickers.length} total tickers)`);
+
+      if (scoredAssets.length === 0) {
+        log.warn('No assets passed filtering criteria (volume threshold or scoring)');
+        return [];
+      }
+
       // Sort by hot score (descending) and take top N
       const topAssets = scoredAssets
         .sort((a, b) => b.hotScore - a.hotScore)
@@ -141,7 +148,13 @@ export class MarketScanner {
       });
     }
 
-    log.debug(`Scored ${scored.length} assets after filtering`);
+    log.info(`Scored ${scored.length} assets after filtering (from ${tickers.length} total tickers)`);
+    
+    if (scored.length === 0) {
+      log.warn(`No assets passed filters. Checked ${tickers.length} tickers, filtered by:`);
+      log.warn(`  - Must end with USDT`);
+      log.warn(`  - Must have quoteVolume >= $${this.MIN_VOLUME_USD.toLocaleString()}`);
+    }
 
     return scored;
   }

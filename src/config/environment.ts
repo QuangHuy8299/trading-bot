@@ -80,6 +80,33 @@ const envSchema = z.object({
   DATA_STALENESS_THRESHOLD_MS: z.string()
     .transform(Number)
     .optional(),
+
+  // Auto-Entry Configuration
+  AUTO_ENTRY_ENABLED: z.string()
+    .transform(s => s === 'true')
+    .default('false'),
+  AUTO_ENTRY_MODE: z.enum(['SAFE', 'AUTO', 'HYBRID'])
+    .default('SAFE'),
+  TPSL_MODE: z.enum(['AUTO_TPSL', 'SL_ONLY', 'MANUAL'])
+    .default('AUTO_TPSL'),
+  RISK_PER_TRADE_PERCENT: z.string()
+    .transform(Number)
+    .default('0.01'), // 1% default
+  RISK_REWARD_RATIO: z.string()
+    .transform(Number)
+    .default('2.0'),
+  DEFAULT_STOP_LOSS_PERCENT: z.string()
+    .transform(Number)
+    .default('0.02'), // 2% default
+  MAX_LEVERAGE: z.string()
+    .transform(Number)
+    .default('1'),
+  MIN_CONFIDENCE_SCORE: z.string()
+    .transform(Number)
+    .default('60'),
+  MAX_CONCURRENT_POSITIONS: z.string()
+    .transform(Number)
+    .default('3'),
 });
 
 export type Environment = z.infer<typeof envSchema>;

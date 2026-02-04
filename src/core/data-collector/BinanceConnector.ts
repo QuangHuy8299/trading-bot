@@ -181,13 +181,17 @@ export class BinanceConnector {
     side: 'BUY' | 'SELL';
     quantity: number;
     reduceOnly?: boolean;
+    type?: 'MARKET' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET';
+    stopPrice?: number;
   }): Promise<BinanceOrderResult> {
     await this.rateLimiter.acquire('binance-trade');
 
     log.info('Executing Binance order', {
       symbol: params.symbol,
       side: params.side,
+      type: params.type || 'MARKET',
       quantity: params.quantity,
+      stopPrice: params.stopPrice,
       reduceOnly: params.reduceOnly,
       testnet: this.isTestnet,
     });
@@ -196,12 +200,17 @@ export class BinanceConnector {
       const orderParams: any = {
         symbol: params.symbol,
         side: params.side,
-        type: 'MARKET',
+        type: params.type || 'MARKET',
         quantity: params.quantity.toString(),
       };
 
       if (params.reduceOnly) {
         orderParams.reduceOnly = 'true';
+      }
+
+      // Add stopPrice for STOP_MARKET and TAKE_PROFIT_MARKET orders
+      if (params.stopPrice && (params.type === 'STOP_MARKET' || params.type === 'TAKE_PROFIT_MARKET')) {
+        orderParams.stopPrice = params.stopPrice.toString();
       }
 
       const order = await this.client.futuresOrder(orderParams);
@@ -227,6 +236,31 @@ export class BinanceConnector {
         `Failed to execute order: ${error instanceof Error ? error.message : 'Unknown'}`,
         undefined,
         { params, originalError: error instanceof Error ? error.message : 'Unknown' }
+      );
+    }
+  }
+
+  /**
+   * Cancel an open order
+   */
+  async cancelOrder(symbol: string, orderId: string): Promise<void> {
+    await this.rateLimiter.acquire('binance-trade');
+
+    log.info('Cancelling Binance order', { symbol, orderId });
+
+    try {
+      await this.client.futuresCancelOrder({
+        symbol,
+        orderId: parseInt(orderId),
+      });
+
+      log.info('Binance order cancelled', { symbol, orderId });
+    } catch (error) {
+      log.error('Binance cancelOrder failed', { symbol, orderId, error });
+      throw new ApiError(
+        `Failed to cancel order: ${error instanceof Error ? error.message : 'Unknown'}`,
+        undefined,
+        { symbol, orderId, originalError: error instanceof Error ? error.message : 'Unknown' }
       );
     }
   }

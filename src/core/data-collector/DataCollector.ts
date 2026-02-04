@@ -111,6 +111,13 @@ export class DataCollector extends EventEmitter {
     return Array.from(this.activeAssets);
   }
 
+  /**
+   * Get BinanceConnector instance (for execution layer)
+   */
+  getBinanceConnector(): BinanceConnector {
+    return this.binanceConnector;
+  }
+
   async collect(asset: string): Promise<MarketData> {
     const startTime = Date.now();
     log.debug(`Collecting data for ${asset}...`);

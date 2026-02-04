@@ -1,5 +1,5 @@
-import { GateEvaluationResult } from '@/types';
-import { RiskConfig } from '@/types/execution.types';
+import { GateEvaluationResult } from '../types';
+import { RiskConfig } from '../types/execution.types';
 
 export class RiskEngine {
   constructor(private config: RiskConfig) {}

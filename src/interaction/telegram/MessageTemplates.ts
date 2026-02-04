@@ -417,6 +417,102 @@ Monitoring these assets for trading signals.
   }
 
   /**
+   * Order executed notification
+   */
+  orderExecuted(suggestion: any, result: any): string {
+    return `
+━━━━━━━━━━━━━━━━━━━━━━━
+✅ <b>ORDER EXECUTED</b>
+${suggestion.asset} | ${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>POSITION</b>
+├ Direction: ${suggestion.direction}
+├ Entry Price: $${suggestion.entryPrice.toFixed(2)}
+├ Position Size: $${suggestion.positionSizeUsd.toFixed(2)}
+└ Order ID: ${result.entryOrder.orderId}
+
+<b>RISK MANAGEMENT</b>
+├ Stop Loss: $${suggestion.stopLoss.toFixed(2)}
+├ Take Profit: $${suggestion.takeProfit.toFixed(2)}
+└ R:R Ratio: 1:${suggestion.riskRewardRatio.toFixed(1)}
+
+<b>EXECUTION DETAILS</b>
+├ Filled: ${result.entryOrder.executedQty}
+├ Avg Price: $${result.entryOrder.avgPrice}
+└ Status: ${result.entryOrder.status}
+
+<b>REASONS</b>
+${suggestion.reasons.slice(0, 3).map((r: string) => `• ${r}`).join('\n')}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+<i>Position opened. TP/SL orders active.</i>
+━━━━━━━━━━━━━━━━━━━━━━━
+    `.trim();
+  }
+
+  /**
+   * Order pending confirmation
+   */
+  orderPending(orderId: string, suggestion: any, expiresAt: Date): string {
+    const minutesUntilExpiry = Math.round((expiresAt.getTime() - Date.now()) / 60000);
+
+    return `
+━━━━━━━━━━━━━━━━━━━━━━━
+🔔 <b>ORDER CONFIRMATION REQUIRED</b>
+${suggestion.asset} | ${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>ORDER DETAILS</b>
+├ Order ID: ${orderId.slice(0, 8)}
+├ Direction: ${suggestion.direction}
+├ Entry Price: $${suggestion.entryPrice.toFixed(2)}
+└ Position Size: $${suggestion.positionSizeUsd.toFixed(2)}
+
+<b>RISK MANAGEMENT</b>
+├ Stop Loss: $${suggestion.stopLoss.toFixed(2)}
+├ Take Profit: $${suggestion.takeProfit.toFixed(2)}
+└ R:R Ratio: 1:${suggestion.riskRewardRatio.toFixed(1)}
+
+<b>CONFIDENCE</b>
+Score: ${suggestion.confidenceScore}/100
+
+<b>REASONS</b>
+${suggestion.reasons.slice(0, 3).map((r: string) => `• ${r}`).join('\n')}
+
+<b>ACTION REQUIRED</b>
+Reply with: <code>/confirm ${orderId.slice(0, 8)}</code>
+⏰ Expires in ${minutesUntilExpiry} minutes
+
+━━━━━━━━━━━━━━━━━━━━━━━
+<i>Confirm to execute this order.</i>
+━━━━━━━━━━━━━━━━━━━━━━━
+    `.trim();
+  }
+
+  /**
+   * Order expired notification
+   */
+  orderExpired(orderId: string): string {
+    return `
+━━━━━━━━━━━━━━━━━━━━━━━
+⏰ <b>ORDER EXPIRED</b>
+${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>ORDER ID:</b> ${orderId.slice(0, 8)}
+
+<b>STATUS</b>
+Order confirmation timeout reached.
+Order has been automatically cancelled.
+
+━━━━━━━━━━━━━━━━━━━━━━━
+<i>No action taken. Order expired.</i>
+━━━━━━━━━━━━━━━━━━━━━━━
+    `.trim();
+  }
+
+  /**
    * Get icon for permission state
    */
   private getStateIcon(state: PermissionState): string {
