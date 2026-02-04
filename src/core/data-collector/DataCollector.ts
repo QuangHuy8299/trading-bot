@@ -17,6 +17,9 @@ export class DataCollector extends EventEmitter {
   private optionProvider: OptionDataAdapter;
   private normalizer: DataNormalizer;
   private auditLogger: AuditLogger;
+  
+  // Track currently active assets
+  private activeAssets: Set<string> = new Set();
 
   constructor(rateLimiter: RateLimiter, auditLogger: AuditLogger) {
     super(); // <--- GỌI SUPER()
@@ -32,6 +35,7 @@ export class DataCollector extends EventEmitter {
     for (const asset of assets) {
       try {
         await this.whaleProvider.startStream(asset);
+        this.activeAssets.add(asset);
         log.info(`Started Whale Stream for ${asset}`);
       } catch (error) {
         log.error(`Failed to start Whale Stream for ${asset}`, { error });
@@ -39,6 +43,72 @@ export class DataCollector extends EventEmitter {
         this.emit('data:error', { asset, error });
       }
     }
+  }
+
+  /**
+   * Update watchlist dynamically (hot swap assets)
+   * 
+   * This method:
+   * - Stops streams for assets no longer in the list
+   * - Starts streams for new assets
+   * - Keeps streams for assets that remain
+   */
+  async updateWatchlist(newAssets: string[]): Promise<void> {
+    log.info(`Updating watchlist. Current: ${Array.from(this.activeAssets).join(', ')}, New: ${newAssets.join(', ')}`);
+
+    const newAssetsSet = new Set(newAssets);
+    const assetsToRemove: string[] = [];
+    const assetsToAdd: string[] = [];
+
+    // Find assets to remove (in current but not in new)
+    for (const asset of this.activeAssets) {
+      if (!newAssetsSet.has(asset)) {
+        assetsToRemove.push(asset);
+      }
+    }
+
+    // Find assets to add (in new but not in current)
+    for (const asset of newAssets) {
+      if (!this.activeAssets.has(asset)) {
+        assetsToAdd.push(asset);
+      }
+    }
+
+    // Stop streams for removed assets
+    for (const asset of assetsToRemove) {
+      try {
+        await this.whaleProvider.stopStream(asset);
+        this.activeAssets.delete(asset);
+        log.info(`Stopped stream for removed asset: ${asset}`);
+      } catch (error) {
+        log.error(`Failed to stop stream for ${asset}`, { error });
+      }
+    }
+
+    // Start streams for new assets
+    for (const asset of assetsToAdd) {
+      try {
+        await this.whaleProvider.startStream(asset);
+        this.activeAssets.add(asset);
+        log.info(`Started stream for new asset: ${asset}`);
+      } catch (error) {
+        log.error(`Failed to start stream for ${asset}`, { error });
+        this.emit('data:error', { asset, error });
+      }
+    }
+
+    if (assetsToRemove.length > 0 || assetsToAdd.length > 0) {
+      log.info(`Watchlist updated. Active assets: ${Array.from(this.activeAssets).join(', ')}`);
+    } else {
+      log.debug('Watchlist unchanged, no updates needed');
+    }
+  }
+
+  /**
+   * Get currently active assets
+   */
+  getActiveAssets(): string[] {
+    return Array.from(this.activeAssets);
   }
 
   async collect(asset: string): Promise<MarketData> {

@@ -135,6 +135,61 @@ export class TelegramNotifier {
   }
 
   /**
+   * Send market status update (T1: INFO)
+   */
+  async sendMarketStatus(
+    asset: string,
+    price: number,
+    priceChange24h: number,
+    volStance: string,
+    impliedVol: number | null,
+    flowDirection: string,
+    permissionState: string
+  ): Promise<void> {
+    const message = this.templates.marketStatus(
+      asset,
+      price,
+      priceChange24h,
+      volStance,
+      impliedVol,
+      flowDirection,
+      permissionState
+    );
+    await this.send(message, MESSAGE_TIERS.T1_INFO);
+  }
+
+  /**
+   * Send volatility/flash move alert (T3: ALERT)
+   */
+  async sendVolatilityAlert(
+    asset: string,
+    triggerType: 'PRICE_CHANGE' | 'VOL_STANCE_CHANGE',
+    details: {
+      priceChange?: number;
+      currentPrice?: number;
+      previousVolStance?: string;
+      currentVolStance?: string;
+    }
+  ): Promise<void> {
+    const message = this.templates.volatilityAlert(asset, triggerType, details);
+    await this.send(message, MESSAGE_TIERS.T3_ALERT);
+  }
+
+  /**
+   * Send scanner notification (T2: WARNING)
+   */
+  async sendScannerNotification(
+    type: 'NO_ASSETS' | 'WATCHLIST_UPDATED',
+    details: {
+      assets?: string[];
+      reason?: string;
+    }
+  ): Promise<void> {
+    const message = this.templates.scannerNotification(type, details);
+    await this.send(message, MESSAGE_TIERS.T2_WARNING);
+  }
+
+  /**
    * Send to a specific chat (for direct replies)
    */
   async sendToChat(chatId: number | string, message: string): Promise<void> {

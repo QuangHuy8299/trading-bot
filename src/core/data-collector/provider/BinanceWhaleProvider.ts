@@ -6,18 +6,21 @@ import { log } from '../../../utils/logger';
 
 export class BinanceWhaleProvider {
   private client: BinanceClient;
-  private wsCleanup: Function | null = null;
+  // Track multiple streams: Map<symbol, cleanupFunction>
+  private activeStreams: Map<string, Function> = new Map();
 
-  // Cache dữ liệu tính toán
-  private whaleCvdAccumulator: number = 0;
-  private totalCvdAccumulator: number = 0;
-  private largeTrades: Array<{
-    price: number;
-    type: 'BUY' | 'SELL';
-    size: string;
-    timestamp: Date;
-    valueUsd: number;
-  }> = [];
+  // Cache dữ liệu tính toán per symbol
+  private whaleDataCache: Map<string, {
+    whaleCvdAccumulator: number;
+    totalCvdAccumulator: number;
+    largeTrades: Array<{
+      price: number;
+      type: 'BUY' | 'SELL';
+      size: string;
+      timestamp: Date;
+      valueUsd: number;
+    }>;
+  }> = new Map();
 
   // Config ngưỡng Whale (ví dụ: $100k)
   private readonly WHALE_THRESHOLD_USD = 100_000;
@@ -35,21 +38,80 @@ export class BinanceWhaleProvider {
    * Bắt đầu lắng nghe thị trường (Realtime)
    */
   async startStream(symbol: string) {
+    // Skip if stream already exists
+    if (this.activeStreams.has(symbol)) {
+      log.debug(`[WhaleProvider] Stream for ${symbol} already active`);
+      return;
+    }
+
     log.info(`[WhaleProvider] Starting stream for ${symbol}...`);
 
-    // Clean up stream cũ nếu có
-    if (this.wsCleanup) this.wsCleanup();
+    // Initialize cache for this symbol
+    if (!this.whaleDataCache.has(symbol)) {
+      this.whaleDataCache.set(symbol, {
+        whaleCvdAccumulator: 0,
+        totalCvdAccumulator: 0,
+        largeTrades: [],
+      });
+    }
 
     // Subscribe vào aggTrade (Aggregated Trades)
-    this.wsCleanup = this.client.ws.aggTrades([symbol], (trade) => {
-      this.processTrade(trade);
+    const cleanup = this.client.ws.aggTrades([symbol], (trade) => {
+      this.processTrade(symbol, trade);
     });
+
+    this.activeStreams.set(symbol, cleanup);
+  }
+
+  /**
+   * Stop stream for a specific symbol
+   */
+  async stopStream(symbol: string) {
+    const cleanup = this.activeStreams.get(symbol);
+    if (cleanup) {
+      log.info(`[WhaleProvider] Stopping stream for ${symbol}...`);
+      cleanup();
+      this.activeStreams.delete(symbol);
+      // Optionally clear cache for this symbol
+      // this.whaleDataCache.delete(symbol);
+    } else {
+      log.debug(`[WhaleProvider] No active stream found for ${symbol}`);
+    }
+  }
+
+  /**
+   * Stop all streams
+   */
+  async stopAllStreams() {
+    log.info(`[WhaleProvider] Stopping all streams (${this.activeStreams.size} active)...`);
+    for (const [symbol, cleanup] of this.activeStreams.entries()) {
+      cleanup();
+    }
+    this.activeStreams.clear();
+  }
+
+  /**
+   * Get list of active symbols
+   */
+  getActiveSymbols(): string[] {
+    return Array.from(this.activeStreams.keys());
   }
 
   /**
    * Xử lý từng lệnh khớp trên thị trường
    */
-  private processTrade(trade: any) {
+  private processTrade(symbol: string, trade: any) {
+    const cache = this.whaleDataCache.get(symbol);
+    if (!cache) {
+      log.warn(`[WhaleProvider] No cache found for ${symbol}, initializing...`);
+      this.whaleDataCache.set(symbol, {
+        whaleCvdAccumulator: 0,
+        totalCvdAccumulator: 0,
+        largeTrades: [],
+      });
+      return;
+    }
+
     const price = parseFloat(trade.price);
     const quantity = parseFloat(trade.quantity);
     const valueUsd = price * quantity;
@@ -61,14 +123,14 @@ export class BinanceWhaleProvider {
     const signedValue = valueUsd * direction;
 
     // 1. Cộng dồn Total CVD
-    this.totalCvdAccumulator += signedValue;
+    cache.totalCvdAccumulator += signedValue;
 
     // 2. Lọc Whale CVD
     if (valueUsd >= this.WHALE_THRESHOLD_USD) {
-      this.whaleCvdAccumulator += signedValue;
+      cache.whaleCvdAccumulator += signedValue;
 
       // Lưu lại Bubble Signal (Lệnh cá voi)
-      this.largeTrades.push({
+      cache.largeTrades.push({
         price,
         type: direction === 1 ? 'BUY' : 'SELL',
         size: this.categorizeSize(valueUsd),
@@ -77,9 +139,9 @@ export class BinanceWhaleProvider {
       });
 
       // Giữ lại 50 lệnh lớn gần nhất thôi
-      if (this.largeTrades.length > 50) this.largeTrades.shift();
+      if (cache.largeTrades.length > 50) cache.largeTrades.shift();
 
-      log.debug(`🐳 WHALE DETECTED: ${direction === 1 ? 'BUY' : 'SELL'} $${Math.round(valueUsd)}`);
+      log.debug(`🐳 WHALE DETECTED [${symbol}]: ${direction === 1 ? 'BUY' : 'SELL'} $${Math.round(valueUsd)}`);
     }
   }
 
@@ -91,24 +153,35 @@ export class BinanceWhaleProvider {
     const prices = await this.client.futuresPrices({ symbol });
     const currentPrice = parseFloat(prices[symbol]);
 
+    // Get cache for this symbol, or initialize if missing
+    let cache = this.whaleDataCache.get(symbol);
+    if (!cache) {
+      cache = {
+        whaleCvdAccumulator: 0,
+        totalCvdAccumulator: 0,
+        largeTrades: [],
+      };
+      this.whaleDataCache.set(symbol, cache);
+    }
+
     return {
       timestamp: new Date(),
 
       // Data tự tính
-      cvdWhale24h: this.whaleCvdAccumulator,
-      cvdTotal24h: this.totalCvdAccumulator,
+      cvdWhale24h: cache.whaleCvdAccumulator,
+      cvdTotal24h: cache.totalCvdAccumulator,
 
       // Data phái sinh
       // Nếu không có API lịch sử 7 ngày, ta tạm dùng số liệu 24h nhân hệ số (hoặc phải lưu DB)
-      cvdWhale7d: this.whaleCvdAccumulator * 3, // Mock logic: tạm estimate
-      netWhaleFlow24h: this.whaleCvdAccumulator,
-      netWhaleFlow7d: this.whaleCvdAccumulator * 3,
+      cvdWhale7d: cache.whaleCvdAccumulator * 3, // Mock logic: tạm estimate
+      netWhaleFlow24h: cache.whaleCvdAccumulator,
+      netWhaleFlow7d: cache.whaleCvdAccumulator * 3,
 
       // Metrics
-      cvdVolumeRatio: this.calculateRatio(),
+      cvdVolumeRatio: this.calculateRatio(cache),
 
       // Signals
-      bubbleSignals: this.largeTrades.map((t) => ({
+      bubbleSignals: cache.largeTrades.map((t) => ({
         price: t.price,
         type: t.type,
         size: t.size,
@@ -125,9 +198,9 @@ export class BinanceWhaleProvider {
     };
   }
 
-  private calculateRatio(): number {
-    if (Math.abs(this.totalCvdAccumulator) === 0) return 0;
-    return Math.abs(this.whaleCvdAccumulator) / Math.abs(this.totalCvdAccumulator);
+  private calculateRatio(cache: { whaleCvdAccumulator: number; totalCvdAccumulator: number }): number {
+    if (Math.abs(cache.totalCvdAccumulator) === 0) return 0;
+    return Math.abs(cache.whaleCvdAccumulator) / Math.abs(cache.totalCvdAccumulator);
   }
 
   private categorizeSize(value: number): string {

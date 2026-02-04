@@ -64,6 +64,11 @@ export class TelegramBot {
       void this.routeCommand(msg, 'killswitch');
     });
 
+    this.bot.onText(/\/check(?:\s+(\w+))?/, (msg, match) => {
+      if (!this.isAuthorized(msg)) return;
+      void this.routeCommand(msg, 'check', match?.[1]);
+    });
+
     // Error handling for polling
     this.bot.on('polling_error', (error) => {
       log.error('Telegram polling error', { error: error.message });
@@ -134,6 +139,7 @@ Use /help to see available commands.
 <b>📊 Information</b>
 /status - All asset states
 /status [ASSET] - Specific asset details
+/check [ASSET] - Quick market check
 /safety - System safety status
 
 <b>🚨 Emergency</b>

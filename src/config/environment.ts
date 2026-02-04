@@ -61,6 +61,14 @@ const envSchema = z.object({
   TRACKED_ASSETS: z.string()
     .default('BTCUSDT,ETHUSDT')
     .transform(s => s.split(',').map(a => a.trim())),
+  
+  // Scanner (optional)
+  ENABLE_AUTO_SCAN: z.string()
+    .transform(s => s === 'true')
+    .default('false'),
+  MAX_ACTIVE_ASSETS: z.string()
+    .transform(Number)
+    .default('5'),
     
   // Timing (optional overrides)
   GATE_EVALUATION_INTERVAL_MS: z.string()

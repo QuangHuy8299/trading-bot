@@ -3,7 +3,7 @@
 
 import { EventEmitter } from 'events';
 import { env } from './config/environment';
-import { TIMING } from './config/constants';
+import { TIMING, VOLATILITY_CONFIG, SCANNER_CONFIG } from './config/constants';
 import { log } from './utils/logger';
 
 import { AuditLogger } from './infrastructure/audit';
@@ -13,11 +13,14 @@ import { DataCollector } from './core/data-collector/DataCollector';
 import { GateEvaluator } from './core/gate-evaluator/GateEvaluator';
 import { PermissionStateEngine } from './core/permission-engine/PermissionStateEngine';
 import { RateLimiter } from './infrastructure/safety/RateLimiter';
+import { MarketScanner } from './core/scanner/MarketScanner';
 import type { PermissionAssessment } from './types/permission.types';
+import { PermissionState } from './types/permission.types';
 import { GateStatus } from './types/gates.types';
+import { MarketData as CollectorMarketData } from './core/data-collector/types';
 
 // Type definitions for assessments
-interface MarketData {
+interface AssessmentMarketData {
   price: number;
   volume24h: number;
   volatility: number;
@@ -32,9 +35,9 @@ interface GateResult {
 interface Assessment {
   asset: string;
   timestamp: Date;
-  data: MarketData;
+  data: AssessmentMarketData;
   gates: Record<string, GateResult>;
-  permission: string;
+  permission: PermissionState;
 }
 
 /**
@@ -53,9 +56,25 @@ export class App extends EventEmitter {
   private gateEvaluator!: GateEvaluator;
   private permissionEngine!: PermissionStateEngine;
   private telegramBot!: TelegramBot;
+  private marketScanner!: MarketScanner;
 
   // Track last assessment for change detection
   private lastAssessments: Map<string, Assessment> = new Map();
+
+  // Scanner loop interval
+  private scannerInterval: NodeJS.Timeout | null = null;
+
+  // Volatility monitoring: Track price history (rolling 5-minute window)
+  private priceHistory: Map<string, Array<{ price: number; timestamp: Date }>> = new Map();
+
+  // Volatility monitoring: Track volStance history
+  private volStanceHistory: Map<string, { volStance: string; timestamp: Date }> = new Map();
+
+  // Rate limiting for volatility alerts (max 1 per 30 mins per asset)
+  private volatilityAlertLastSent: Map<string, Date> = new Map();
+
+  // Track last scanner notification to avoid spam (max 1 per hour)
+  private lastScannerNoAssetsNotification: Date | null = null;
 
   constructor() {
     super();
@@ -88,6 +107,10 @@ export class App extends EventEmitter {
         windowMs: 60 * 1000,
       });
       this.dataCollector = new DataCollector(binanceRateLimiter, this.auditLogger);
+      
+      // Initialize MarketScanner
+      this.marketScanner = new MarketScanner(binanceRateLimiter);
+      
       log.info('✓ Data layer initialized');
 
       // Initialize evaluation layer
@@ -149,12 +172,23 @@ export class App extends EventEmitter {
     try {
       // Start data collection
       log.debug('Starting data collection...');
-      void this.dataCollector.start(env.TRACKED_ASSETS);
-      log.info(`✓ Data collection started for: ${env.TRACKED_ASSETS.join(', ')}`);
+      // If auto-scan is enabled, start with empty list (scanner will populate)
+      // Otherwise, use TRACKED_ASSETS from env
+      const initialAssets = SCANNER_CONFIG.ENABLE_AUTO_SCAN ? [] : env.TRACKED_ASSETS;
+      void this.dataCollector.start(initialAssets);
+      log.info(`✓ Data collection started for: ${initialAssets.length > 0 ? initialAssets.join(', ') : '(will be populated by scanner)'}`);
 
       // Start periodic evaluation loop
       this.startEvaluationLoop();
       log.info('✓ Evaluation loop started');
+
+      // Start scanner loop if enabled
+      if (SCANNER_CONFIG.ENABLE_AUTO_SCAN) {
+        this.startScannerLoop();
+        log.info('✓ Scanner loop started');
+      } else {
+        log.info('✓ Scanner loop disabled (ENABLE_AUTO_SCAN=false)');
+      }
 
       // Setup event handlers
       this.setupEventHandlers();
@@ -213,6 +247,13 @@ export class App extends EventEmitter {
         log.info('✓ Evaluation loop stopped');
       }
 
+      // Stop scanner loop
+      if (this.scannerInterval) {
+        clearInterval(this.scannerInterval);
+        this.scannerInterval = null;
+        log.info('✓ Scanner loop stopped');
+      }
+
       // Stop data collection
       // this.dataCollector.stop();
       log.info('✓ Data collection stopped');
@@ -252,13 +293,116 @@ export class App extends EventEmitter {
   }
 
   /**
+   * Start the scanner loop for dynamic asset selection
+   * Runs periodically to scan top assets and update watchlist
+   */
+  private startScannerLoop(): void {
+    const intervalMs = SCANNER_CONFIG.SCANNER_INTERVAL_MS;
+
+    this.scannerInterval = setInterval(() => void this.runScannerCycle(), intervalMs);
+
+    // Run initial scan immediately
+    void this.runScannerCycle();
+
+    log.debug(`Scanner loop started with ${intervalMs}ms interval (${intervalMs / 60000} minutes)`);
+  }
+
+  /**
+   * Run a single scanner cycle
+   */
+  private async runScannerCycle(): Promise<void> {
+    log.debug('Running scanner cycle...');
+
+    try {
+      const notifier = this.telegramBot.getNotifier();
+      
+      // Scan top assets
+      const topAssets = await this.marketScanner.scanTopAssets(SCANNER_CONFIG.MAX_ACTIVE_ASSETS);
+
+      if (topAssets.length === 0) {
+        log.warn('Scanner returned no assets, keeping current watchlist');
+        
+        // Notify if no assets found (rate limited to max 1 per hour)
+        const now = new Date();
+        const shouldNotify = !this.lastScannerNoAssetsNotification || 
+          (now.getTime() - this.lastScannerNoAssetsNotification.getTime()) >= 60 * 60 * 1000; // 1 hour
+
+        if (shouldNotify && notifier) {
+          try {
+            await notifier.sendScannerNotification('NO_ASSETS', {
+              reason: 'No assets met minimum volume threshold ($50M) or scoring criteria',
+            });
+            this.lastScannerNoAssetsNotification = now;
+            log.info('Sent notification: No tradeable pairs found');
+          } catch (notifyError) {
+            log.error('Failed to send scanner notification', { error: notifyError });
+          }
+        } else if (!shouldNotify) {
+          log.debug('Skipping notification (rate limited - last sent less than 1 hour ago)');
+        }
+        
+        return;
+      }
+
+      // Update watchlist in DataCollector
+      const previousAssets = this.dataCollector.getActiveAssets();
+      await this.dataCollector.updateWatchlist(topAssets);
+
+      log.info(`Watchlist updated: [${topAssets.join(', ')}]`);
+
+      // Notify about watchlist update
+      if (notifier && JSON.stringify(previousAssets.sort()) !== JSON.stringify(topAssets.sort())) {
+        try {
+          await notifier.sendScannerNotification('WATCHLIST_UPDATED', {
+            assets: topAssets,
+          });
+          log.info('Sent notification: Watchlist updated');
+        } catch (notifyError) {
+          log.error('Failed to send watchlist update notification', { error: notifyError });
+        }
+      }
+
+      // Reset no-assets notification timer if we found assets
+      this.lastScannerNoAssetsNotification = null;
+
+      // Emit event for other listeners
+      this.emit('watchlist:updated', { assets: topAssets });
+    } catch (error) {
+      log.error('Error in scanner cycle', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      
+      // Notify on scanner errors
+      const notifier = this.telegramBot.getNotifier();
+      if (notifier) {
+        try {
+          await notifier.sendSystemCritical(
+            'SCANNER ERROR',
+            `Scanner cycle failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\nSystem will retry on next cycle.`
+          );
+        } catch (notifyError) {
+          log.error('Failed to send scanner error notification', { error: notifyError });
+        }
+      }
+    }
+  }
+
+  /**
    * Run a single evaluation cycle
    */
   private runEvaluationCycle(): void {
     log.debug('Running evaluation cycle...');
 
     try {
-      for (const asset of env.TRACKED_ASSETS) {
+      // Get active assets from DataCollector (supports dynamic watchlist)
+      const activeAssets = this.dataCollector.getActiveAssets();
+      
+      if (activeAssets.length === 0) {
+        log.debug('No active assets to evaluate (scanner may not have run yet)');
+        return;
+      }
+
+      for (const asset of activeAssets) {
         void this.evaluateAsset(asset).catch((err: Error) => {
           log.error(`Error evaluating ${asset}:`, err);
         });
@@ -286,6 +430,9 @@ export class App extends EventEmitter {
 
       // 2. Evaluate gates
       const gateResult = this.gateEvaluator.evaluate(data);
+
+      // 2.5. Check for volatility/flash move conditions
+      await this.checkVolatilityConditions(asset, data, gateResult);
 
       // 3. Calculate permission state
       const assessment = this.permissionEngine.assess(asset, gateResult);
@@ -323,27 +470,33 @@ export class App extends EventEmitter {
 
       // 5. Check for state changes
       const lastAssessment = this.lastAssessments.get(asset);
-      const permissionChanged =
-        lastAssessment && lastAssessment.permission !== (assessment.permissionState as string);
-      const gatesChanged =
-        lastAssessment &&
-        JSON.stringify(lastAssessment.gates) !== JSON.stringify(internalAssessment.gates);
 
-      // 6. Update cache and notify on change
+      // 6. Update cache
       this.lastAssessments.set(asset, internalAssessment);
 
-      // Notify on any state change or gate change
-      // This ensures downgrades (e.g. to WAIT/NO_TRADE) and context updates are reported
-      if (!lastAssessment || permissionChanged || gatesChanged) {
+      // 7. Detect transition from non-trading → trading-allowed state
+      const lastState = lastAssessment?.permission;
+      const currentState = assessment.permissionState;
+
+      const isTradingState = (state: PermissionState): boolean =>
+        state === PermissionState.TRADE_ALLOWED ||
+        state === PermissionState.TRADE_ALLOWED_REDUCED_RISK;
+
+      const wasTrading = lastState ? isTradingState(lastState) : false;
+      const isNowTrading = isTradingState(currentState);
+
+      const isTransitionToTrade = !wasTrading && isNowTrading;
+
+      if (isTransitionToTrade && lastState) {
         await this.notifyStateChange(asset, internalAssessment, lastAssessment, assessment);
       }
 
-      // 7. Emit event for other listeners
+      // 8. Emit event for other listeners (internal only, no Telegram noise)
       this.emit('asset:evaluated', internalAssessment);
 
       log.debug(`Completed evaluation for ${asset}`, {
         permission: assessment.permissionState,
-        changed: !!permissionChanged,
+        transitionedToTrade: isTransitionToTrade,
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -352,7 +505,118 @@ export class App extends EventEmitter {
   }
 
   /**
-   * Notify user of permission state changes
+   * Check for volatility/flash move conditions and send alerts if needed
+   */
+  private async checkVolatilityConditions(
+    asset: string,
+    marketData: CollectorMarketData,
+    gateResult: any
+  ): Promise<void> {
+    try {
+      const currentPrice = marketData.price;
+      const currentVolStance = gateResult.regime.volStance;
+      const now = new Date();
+
+      // 1. Track price history (rolling 5-minute window)
+      if (!this.priceHistory.has(asset)) {
+        this.priceHistory.set(asset, []);
+      }
+      const priceHistory = this.priceHistory.get(asset)!;
+      
+      // Add current price
+      priceHistory.push({ price: currentPrice, timestamp: now });
+      
+      // Remove entries older than 5 minutes
+      const windowStart = new Date(now.getTime() - VOLATILITY_CONFIG.PRICE_CHANGE_WINDOW_MS);
+      const filteredHistory = priceHistory.filter(entry => entry.timestamp >= windowStart);
+      this.priceHistory.set(asset, filteredHistory);
+
+      // 2. Check for significant price change (> threshold) within 5 minutes
+      if (filteredHistory.length >= 2) {
+        const oldestPrice = filteredHistory[0].price;
+        const priceChangePercent = ((currentPrice - oldestPrice) / oldestPrice) * 100;
+        
+        if (Math.abs(priceChangePercent) >= VOLATILITY_CONFIG.VOLATILITY_THRESHOLD_PERCENT) {
+          // Check rate limit
+          const lastAlertTime = this.volatilityAlertLastSent.get(asset);
+          const canSendAlert = !lastAlertTime || 
+            (now.getTime() - lastAlertTime.getTime()) >= VOLATILITY_CONFIG.VOLATILITY_ALERT_RATE_LIMIT_MS;
+
+          if (canSendAlert) {
+            const notifier = this.telegramBot.getNotifier();
+            if (notifier) {
+              await notifier.sendVolatilityAlert(asset, 'PRICE_CHANGE', {
+                priceChange: priceChangePercent,
+                currentPrice: currentPrice,
+              });
+              
+              this.volatilityAlertLastSent.set(asset, now);
+              log.info(`Volatility alert sent for ${asset}`, {
+                trigger: 'PRICE_CHANGE',
+                changePercent: priceChangePercent.toFixed(2),
+              });
+            }
+          } else {
+            log.debug(`Volatility alert rate-limited for ${asset}`, {
+              lastSent: lastAlertTime,
+            });
+          }
+        }
+      }
+
+      // 3. Check for volStance transitions
+      const lastVolStance = this.volStanceHistory.get(asset);
+      if (lastVolStance) {
+        const volStanceChanged = lastVolStance.volStance !== currentVolStance;
+        
+        // Only alert on transitions from UNCLEAR to a clear stance, or between clear stances
+        const isSignificantTransition = 
+          (lastVolStance.volStance === 'UNCLEAR' && currentVolStance !== 'UNCLEAR') ||
+          (lastVolStance.volStance !== 'UNCLEAR' && currentVolStance !== 'UNCLEAR' && volStanceChanged);
+
+        if (isSignificantTransition) {
+          // Check rate limit
+          const lastAlertTime = this.volatilityAlertLastSent.get(asset);
+          const canSendAlert = !lastAlertTime || 
+            (now.getTime() - lastAlertTime.getTime()) >= VOLATILITY_CONFIG.VOLATILITY_ALERT_RATE_LIMIT_MS;
+
+          if (canSendAlert) {
+            const notifier = this.telegramBot.getNotifier();
+            if (notifier) {
+              await notifier.sendVolatilityAlert(asset, 'VOL_STANCE_CHANGE', {
+                previousVolStance: lastVolStance.volStance,
+                currentVolStance: currentVolStance,
+              });
+              
+              this.volatilityAlertLastSent.set(asset, now);
+              log.info(`Volatility alert sent for ${asset}`, {
+                trigger: 'VOL_STANCE_CHANGE',
+                from: lastVolStance.volStance,
+                to: currentVolStance,
+              });
+            }
+          } else {
+            log.debug(`Volatility alert rate-limited for ${asset}`, {
+              lastSent: lastAlertTime,
+            });
+          }
+        }
+      }
+
+      // Update volStance history
+      this.volStanceHistory.set(asset, { volStance: currentVolStance, timestamp: now });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      log.error(`Error checking volatility conditions for ${asset}:`, err);
+    }
+  }
+
+  /**
+   * Notify user of important permission state transitions
+   * 
+   * State Transition Alerting:
+   *  - Only alert when moving from a non-trading state (WAIT/NO_TRADE/SCALP_ONLY)
+   *    into a trading-allowed state (TRADE_ALLOWED / TRADE_ALLOWED_REDUCED_RISK).
    */
   private async notifyStateChange(
     asset: string,
@@ -367,33 +631,22 @@ export class App extends EventEmitter {
         return;
       }
 
-      // Send notification based on state change
       if (!previous) {
-        // Initial assessment
-        await notifier.sendPermissionUpdate(fullAssessment);
-        log.info(`Initial permission assessment sent for ${asset}`, {
+        // No previous state to compare with – do not spam Telegram on first evaluation
+        log.debug(`Initial permission assessment recorded for ${asset}`, {
           permission: current.permission,
         });
-      } else if (previous.permission !== current.permission) {
-        // State changed
-        const trigger = `Permission state changed due to gate evaluation`;
-        await notifier.sendPermissionChange(
-          asset,
-          previous.permission,
-          current.permission,
-          trigger
-        );
-        log.info(`Permission state change notification sent for ${asset}`, {
-          from: previous.permission,
-          to: current.permission,
-        });
-      } else if (JSON.stringify(previous.gates) !== JSON.stringify(current.gates)) {
-        // Gates changed but permission same
-        await notifier.sendPermissionUpdate(fullAssessment);
-        log.info(`Gate status update sent for ${asset}`, {
-          permission: current.permission,
-        });
+        return;
       }
+
+      // At this point, notifyStateChange is only called for non-trade → trade transitions.
+      const trigger = 'Permission state transitioned into trading-allowed state';
+      await notifier.sendPermissionChange(asset, previous.permission, current.permission, trigger);
+
+      log.info(`Permission transition alert sent for ${asset}`, {
+        from: previous.permission,
+        to: current.permission,
+      });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       log.error(`Failed to send notification for ${asset}:`, err);

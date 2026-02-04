@@ -151,6 +151,37 @@ export const SAFETY_LIMITS = {
 } as const;
 
 /**
+ * Volatility monitoring thresholds
+ */
+export const VOLATILITY_CONFIG = {
+  // Price change threshold for flash move alerts (1.5%)
+  VOLATILITY_THRESHOLD_PERCENT: 1.5,
+  
+  // Time window for price change detection (5 minutes)
+  PRICE_CHANGE_WINDOW_MS: 5 * 60 * 1000,
+  
+  // Rate limit for volatility alerts (max 1 per 30 minutes per asset)
+  VOLATILITY_ALERT_RATE_LIMIT_MS: 30 * 60 * 1000,
+} as const;
+
+/**
+ * Market Scanner configuration
+ */
+export const SCANNER_CONFIG = {
+  // Enable automatic asset scanning
+  ENABLE_AUTO_SCAN: process.env.ENABLE_AUTO_SCAN === 'true',
+  
+  // Maximum number of active assets to track
+  MAX_ACTIVE_ASSETS: parseInt(process.env.MAX_ACTIVE_ASSETS || '5', 10),
+  
+  // Scanner interval (15 minutes)
+  SCANNER_INTERVAL_MS: 15 * 60 * 1000,
+  
+  // Minimum volume threshold for filtering (USD)
+  MIN_VOLUME_USD: 50_000_000, // $50M
+} as const;
+
+/**
  * Forbidden language patterns (per Phase 3 §3.3)
  * System messages must never contain these
  */

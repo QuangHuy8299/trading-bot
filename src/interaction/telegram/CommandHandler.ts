@@ -44,6 +44,8 @@ export class CommandHandler {
     switch (command) {
       case 'status':
         return this.handleStatus(args[0]);
+      case 'check':
+        return this.handleCheck(args[0]);
       case 'prepare_reduce':
         return this.handlePrepare('REDUCE', args[0], args[1], traderId);
       case 'prepare_close':
@@ -64,6 +66,77 @@ export class CommandHandler {
         return this.handleSafetyStatus();
       default:
         return `Unknown command: ${command}\nUse /help for available commands.`;
+    }
+  }
+
+  /**
+   * Handle /check command - returns concise market status
+   */
+  private async handleCheck(asset?: string): Promise<string> {
+    if (!asset) {
+      return `
+<b>Market Check</b>
+
+Usage: /check ASSET
+
+Example: /check BTCUSDT
+
+Returns current price, volatility, flow, and permission state.
+      `.trim();
+    }
+
+    const upperAsset = asset.toUpperCase();
+
+    try {
+      // Fetch latest market data
+      const marketData = await this.dataCollector.collect(upperAsset);
+
+      if (!marketData) {
+        return `No market data available for ${upperAsset}. Try again later.`;
+      }
+
+      // Evaluate gates
+      const gateResult = this.gateEvaluator.evaluate(marketData);
+      // Assess permission state
+      const assessment = this.permissionEngine.assess(upperAsset, gateResult);
+
+      // Format concise response
+      const price = marketData.price;
+      const priceChange24h = marketData.binance.priceChangePercent24h;
+      const volStance = gateResult.regime.volStance;
+      const impliedVol = marketData.option?.impliedVolatility;
+      const flowDirection = gateResult.flow.flowDirection;
+      const permissionState = assessment.permissionState;
+
+      const priceChangeStr = priceChange24h >= 0 
+        ? `+${priceChange24h.toFixed(2)}%` 
+        : `${priceChange24h.toFixed(2)}%`;
+      
+      const volInfo = impliedVol 
+        ? `${volStance} (IV: ${(impliedVol * 100).toFixed(1)}%)`
+        : volStance;
+
+      return `
+━━━━━━━━━━━━━━━━━━━━━━━
+📊 <b>MARKET CHECK</b>
+${upperAsset} | ${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Price:</b> $${price.toLocaleString()} (${priceChangeStr} 24h)
+
+<b>Volatility:</b> ${volInfo}
+
+<b>Flow:</b> ${flowDirection}
+
+<b>Permission:</b> ${formatPermissionState(permissionState)}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+Use /status ${upperAsset} for full assessment
+━━━━━━━━━━━━━━━━━━━━━━━
+      `.trim();
+    } catch (error) {
+      log.error(`Failed to handle check for ${upperAsset}`, { error });
+      return `⚠️ Error fetching data for ${upperAsset}: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
   }
 

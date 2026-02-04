@@ -245,6 +245,178 @@ ${details.error ?? 'Unknown error'}
   }
 
   /**
+   * Market Status (T1: INFO)
+   */
+  marketStatus(
+    asset: string,
+    price: number,
+    priceChange24h: number,
+    volStance: string,
+    impliedVol: number | null,
+    flowDirection: string,
+    permissionState: string
+  ): string {
+    const priceChangeStr = priceChange24h >= 0 
+      ? `+${priceChange24h.toFixed(2)}%` 
+      : `${priceChange24h.toFixed(2)}%`;
+    
+    const volInfo = impliedVol 
+      ? `${volStance} (IV: ${(impliedVol * 100).toFixed(1)}%)`
+      : volStance;
+
+    return `
+━━━━━━━━━━━━━━━━━━━━━━━
+📊 <b>MARKET STATUS</b>
+${asset} | ${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Price:</b> $${price.toLocaleString()} (${priceChangeStr} 24h)
+
+<b>Volatility:</b> ${volInfo}
+
+<b>Flow:</b> ${flowDirection}
+
+<b>Permission:</b> ${formatPermissionState(permissionState as PermissionState)}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+<i>Market observation only. Not a trade signal.</i>
+━━━━━━━━━━━━━━━━━━━━━━━
+    `.trim();
+  }
+
+  /**
+   * Volatility Alert (T3: ALERT)
+   */
+  volatilityAlert(
+    asset: string,
+    triggerType: 'PRICE_CHANGE' | 'VOL_STANCE_CHANGE',
+    details: {
+      priceChange?: number;
+      currentPrice?: number;
+      previousVolStance?: string;
+      currentVolStance?: string;
+    }
+  ): string {
+    if (triggerType === 'PRICE_CHANGE' && details.priceChange !== undefined && details.currentPrice !== undefined) {
+      const changeStr = details.priceChange >= 0 
+        ? `+${details.priceChange.toFixed(2)}%` 
+        : `${details.priceChange.toFixed(2)}%`;
+      const direction = details.priceChange >= 0 ? 'UP' : 'DOWN';
+      
+      return `
+━━━━━━━━━━━━━━━━━━━━━━━
+⚡ <b>FLASH MOVE DETECTED</b>
+${asset} | ${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>TRIGGER:</b> Significant price movement
+
+<b>CHANGE</b>
+├ Direction: ${direction}
+├ Magnitude: ${changeStr}
+└ Current Price: $${details.currentPrice.toLocaleString()}
+
+<b>TIME WINDOW:</b> 5 minutes
+
+━━━━━━━━━━━━━━━━━━━━━━━
+Reply /check ${asset} for current status
+━━━━━━━━━━━━━━━━━━━━━━━
+<i>Volatility alert. Not a trade signal.</i>
+━━━━━━━━━━━━━━━━━━━━━━━
+      `.trim();
+    }
+
+    if (triggerType === 'VOL_STANCE_CHANGE' && details.previousVolStance && details.currentVolStance) {
+      return `
+━━━━━━━━━━━━━━━━━━━━━━━
+⚡ <b>VOLATILITY STANCE CHANGE</b>
+${asset} | ${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>TRIGGER:</b> Regime Gate vol stance transition
+
+<b>CHANGE</b>
+├ From: ${details.previousVolStance}
+└ To: ${details.currentVolStance}
+
+<b>CONTEXT</b>
+This indicates a shift in market volatility expectations.
+
+━━━━━━━━━━━━━━━━━━━━━━━
+Reply /check ${asset} for current status
+━━━━━━━━━━━━━━━━━━━━━━━
+<i>Volatility alert. Not a trade signal.</i>
+━━━━━━━━━━━━━━━━━━━━━━━
+      `.trim();
+    }
+
+    return `
+━━━━━━━━━━━━━━━━━━━━━━━
+⚡ <b>VOLATILITY ALERT</b>
+${asset} | ${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+Volatility conditions have changed.
+
+Reply /check ${asset} for current status
+━━━━━━━━━━━━━━━━━━━━━━━
+    `.trim();
+  }
+
+  /**
+   * Scanner Notification (T2: WARNING)
+   */
+  scannerNotification(
+    type: 'NO_ASSETS' | 'WATCHLIST_UPDATED',
+    details: {
+      assets?: string[];
+      reason?: string;
+    }
+  ): string {
+    if (type === 'NO_ASSETS') {
+      return `
+━━━━━━━━━━━━━━━━━━━━━━━
+🔍 <b>SCANNER ALERT</b>
+${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>STATUS:</b> No tradeable pairs found
+
+<b>DETAILS</b>
+Scanner completed but found no assets meeting criteria:
+${details.reason || '• Volume too low\n• Price movement insufficient\n• No qualifying opportunities'}
+
+<b>ACTION</b>
+Current watchlist remains unchanged.
+Scanner will retry in 15 minutes.
+
+━━━━━━━━━━━━━━━━━━━━━━━
+<i>Market conditions may be unfavorable for trading.</i>
+━━━━━━━━━━━━━━━━━━━━━━━
+      `.trim();
+    }
+
+    // WATCHLIST_UPDATED
+    return `
+━━━━━━━━━━━━━━━━━━━━━━━
+✅ <b>WATCHLIST UPDATED</b>
+${formatTimestamp(new Date())}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>NEW ASSETS:</b>
+${details.assets?.map(a => `• ${a}`).join('\n') || 'None'}
+
+<b>STATUS</b>
+Scanner identified top opportunities.
+Monitoring these assets for trading signals.
+
+━━━━━━━━━━━━━━━━━━━━━━━
+<i>Watchlist updated by automatic scanner.</i>
+━━━━━━━━━━━━━━━━━━━━━━━
+    `.trim();
+  }
+
+  /**
    * Get icon for permission state
    */
   private getStateIcon(state: PermissionState): string {
