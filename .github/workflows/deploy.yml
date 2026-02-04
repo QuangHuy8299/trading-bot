@@ -1,0 +1,21 @@
+name: Deploy Trading Bot
+
+on:
+  push:
+    branches:
+      - main # Hoặc tên branch bạn dùng để chạy bot
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to DigitalOcean
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: root
+          password: ${{ secrets.PASSWORD }}
+          script: |
+            cd ~/trading-bot
+            git pull origin main
+            docker-compose -f docker/docker-compose.yml up -d --build
