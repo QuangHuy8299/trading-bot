@@ -64,15 +64,21 @@ export class RiskGate {
     // Generate human-readable note
     const humanNote = this.generateHumanNote(status, crowdingLevel, stressRangeStatus, fundingBias);
 
+    const binanceQuality = data.dataQuality.binance;
+    const dataFreshness =
+      !binanceQuality
+        ? DataFreshness.UNKNOWN
+        : binanceQuality.fresh
+        ? DataFreshness.CURRENT
+        : DataFreshness.STALE;
+
     return {
       gateName: 'RISK',
       status,
       confidence,
       supportingEvidence,
       conflictingEvidence,
-      dataFreshness: data.dataQuality.binance.fresh 
-        ? DataFreshness.CURRENT 
-        : DataFreshness.STALE,
+      dataFreshness,
       humanNote,
       evaluatedAt: new Date(),
       oiTrend,
@@ -259,26 +265,28 @@ export class RiskGate {
    * Determine confidence level based on data quality
    */
   private determineConfidence(data: MarketData): ConfidenceLevel {
-    // CRITICAL or unavailable data → LOW confidence
-    if (data.dataQuality.overall === 'CRITICAL') {
+    const overallScore = data.dataQuality.overall;
+
+    // Very low overall score → LOW confidence
+    if (overallScore <= 30) {
       return ConfidenceLevel.LOW;
     }
-    
-    // Missing Binance data → LOW confidence
-    if (!data.dataQuality.binance.fresh) {
+
+    // Missing or stale Binance data → LOW confidence
+    if (!data.dataQuality.binance || !data.dataQuality.binance.fresh) {
       return ConfidenceLevel.LOW;
     }
-    
+
     // Missing option data (can't determine stress range) → MEDIUM confidence
     if (!data.option) {
       return ConfidenceLevel.MEDIUM;
     }
-    
-    // Good data quality → HIGH confidence
-    if (data.dataQuality.overall === 'GOOD') {
+
+    // High overall score → HIGH confidence
+    if (overallScore >= 80) {
       return ConfidenceLevel.HIGH;
     }
-    
+
     return ConfidenceLevel.MEDIUM;
   }
 

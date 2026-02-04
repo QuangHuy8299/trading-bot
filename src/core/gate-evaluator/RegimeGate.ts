@@ -163,8 +163,10 @@ export class RegimeGate {
       return ConfidenceLevel.LOW;
     }
 
-    // Stale data = LOW confidence
-    if (!data.dataQuality.option.fresh) {
+    const optionQuality = data.dataQuality.option;
+
+    // Missing or stale option quality = LOW confidence
+    if (!optionQuality || !optionQuality.fresh) {
       return ConfidenceLevel.LOW;
     }
 
@@ -259,7 +261,12 @@ export class RegimeGate {
       return DataFreshness.UNKNOWN;
     }
 
-    return data.dataQuality.option.fresh ? DataFreshness.CURRENT : DataFreshness.STALE;
+    const optionQuality = data.dataQuality.option;
+    if (!optionQuality) {
+      return DataFreshness.UNKNOWN;
+    }
+
+    return optionQuality.fresh ? DataFreshness.CURRENT : DataFreshness.STALE;
   }
 
   /**

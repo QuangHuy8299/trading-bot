@@ -82,35 +82,31 @@ export class TelegramBot {
       this.auditLogger.logTraderAction({
         actionType: 'COMMAND_RECEIVED',
         traderId: userId,
+        asset: 'SYSTEM',
         details: { command, args: args.filter(Boolean) },
         timestamp: new Date(),
       });
-
       const response = await this.commandHandler.handle(
         command,
         args.filter((a): a is string => !!a),
         userId
       );
 
-      await this.bot.sendMessage(chatId, response, { 
+      await this.bot.sendMessage(chatId, response, {
         parse_mode: 'HTML',
-        disable_web_page_preview: true 
+        disable_web_page_preview: true,
       });
     } catch (error) {
       const msgError = error instanceof Error ? error.message : 'Unknown error';
-      
+
       try {
-        await this.bot.sendMessage(
-          chatId, 
-          `❌ <b>Error:</b> ${msgError}`, 
-          { parse_mode: 'HTML' }
-        );
+        await this.bot.sendMessage(chatId, `❌ <b>Error:</b> ${msgError}`, { parse_mode: 'HTML' });
       } catch (sendError) {
-        log.error('Failed to send error message', { 
-          error: sendError instanceof Error ? sendError.message : 'Unknown error' 
+        log.error('Failed to send error message', {
+          error: sendError instanceof Error ? sendError.message : 'Unknown error',
         });
       }
-      
+
       log.error(`Command failed: ${command}`, { error: msgError, userId });
     }
   }
@@ -125,9 +121,9 @@ Use /help to see available commands.
     `.trim();
       await this.bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
     } catch (error) {
-      log.error('Failed to send welcome message', { 
+      log.error('Failed to send welcome message', {
         error: error instanceof Error ? error.message : 'Unknown error',
-        chatId 
+        chatId,
       });
     }
   }
@@ -145,9 +141,9 @@ Use /help to see available commands.
     `.trim();
       await this.bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
     } catch (error) {
-      log.error('Failed to send help message', { 
+      log.error('Failed to send help message', {
         error: error instanceof Error ? error.message : 'Unknown error',
-        chatId 
+        chatId,
       });
     }
   }
@@ -162,8 +158,8 @@ Use /help to see available commands.
       );
       log.warn('Unauthorized access attempt', { userId, text: msg.text });
     } catch (error) {
-      log.error('Failed to send unauthorized message', { 
-        error: error instanceof Error ? error.message : 'Unknown error' 
+      log.error('Failed to send unauthorized message', {
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }

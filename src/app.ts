@@ -12,9 +12,6 @@ import { CommandHandler, TelegramBot } from './interaction/telegram';
 import { DataCollector } from './core/data-collector/DataCollector';
 import { GateEvaluator } from './core/gate-evaluator/GateEvaluator';
 import { PermissionStateEngine } from './core/permission-engine/PermissionStateEngine';
-import { BinanceConnector } from './core/data-collector/BinanceConnector';
-import { OptionDataAdapter } from './core/data-collector/OptionDataAdapter';
-import { WhaleDataAdapter } from './core/data-collector/WhaleDataAdapter';
 import { RateLimiter } from './infrastructure/safety/RateLimiter';
 import type { PermissionAssessment } from './types/permission.types';
 import { GateStatus } from './types/gates.types';
@@ -90,16 +87,7 @@ export class App extends EventEmitter {
         maxRequests: 1200, // Example: 1200 requests per minute (Binance default)
         windowMs: 60 * 1000,
       });
-      const binanceConnector = new BinanceConnector(binanceRateLimiter);
-      const optionAdapter = new OptionDataAdapter();
-      const whaleAdapter = new WhaleDataAdapter();
-      this.dataCollector = new DataCollector(
-        binanceConnector,
-        optionAdapter,
-        whaleAdapter,
-        this.auditLogger,
-        { assets: env.TRACKED_ASSETS }
-      );
+      this.dataCollector = new DataCollector(binanceRateLimiter, this.auditLogger);
       log.info('✓ Data layer initialized');
 
       // Initialize evaluation layer
@@ -248,6 +236,9 @@ export class App extends EventEmitter {
 
   /**
    * Start the periodic evaluation loop
+   * Note: This determines the system's reaction speed.
+   * While data arrives in real-time (via DataCollector), decisions are made
+   * on this interval to ensure stability and prevent notification spam.
    */
   private startEvaluationLoop(): void {
     const intervalMs = env.GATE_EVALUATION_INTERVAL_MS ?? TIMING.GATE_EVALUATION_INTERVAL_MS;
@@ -287,7 +278,7 @@ export class App extends EventEmitter {
 
     try {
       // 1. Get market data
-      const data = this.dataCollector.getData(asset);
+      const data = await this.dataCollector.collect(asset);
       if (!data) {
         log.warn(`No data available for ${asset}`);
         return;
@@ -341,13 +332,9 @@ export class App extends EventEmitter {
       // 6. Update cache and notify on change
       this.lastAssessments.set(asset, internalAssessment);
 
-      // Only notify when state changes to a TRADE state
-      if (
-        !lastAssessment ||
-        (lastAssessment.permission !== internalAssessment.permission &&
-          (internalAssessment.permission.includes('TRADE') ||
-            internalAssessment.permission === 'SCALP_ONLY'))
-      ) {
+      // Notify on any state change or gate change
+      // This ensures downgrades (e.g. to WAIT/NO_TRADE) and context updates are reported
+      if (!lastAssessment || permissionChanged || gatesChanged) {
         await this.notifyStateChange(asset, internalAssessment, lastAssessment, assessment);
       }
 
@@ -445,6 +432,9 @@ export class App extends EventEmitter {
         price: data?.price,
         volume: data?.volume24h,
       });
+      // TIP: For "True Real-Time" execution, you could trigger evaluation here:
+      // void this.evaluateAsset(asset);
+      // However, keep the interval loop as a fallback and safety mechanism.
     });
 
     // Handle permission changes

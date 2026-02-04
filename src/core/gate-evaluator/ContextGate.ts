@@ -245,15 +245,20 @@ export class ContextGate {
     if (!data.whale) {
       return ConfidenceLevel.LOW;
     }
-    
-    if (!data.dataQuality.whale.fresh) {
+
+    const whaleQuality = data.dataQuality.whale;
+
+    // Missing or stale whale quality → medium confidence
+    if (!whaleQuality || !whaleQuality.fresh) {
       return ConfidenceLevel.MEDIUM;
     }
-    
-    if (data.dataQuality.overall === 'GOOD') {
+
+    // Map numeric overall score (0‑100) to confidence
+    const overallScore = data.dataQuality.overall;
+    if (overallScore >= 80) {
       return ConfidenceLevel.HIGH;
     }
-    
+
     return ConfidenceLevel.MEDIUM;
   }
 

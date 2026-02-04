@@ -53,14 +53,14 @@ export interface WhaleData {
   cvdTotal24h: number;
   cvdVolumeRatio: number;
   whaleVwap: number;
-  vwapBands: { 
-    lower: number; 
+  vwapBands: {
+    lower: number;
     upper: number;
     bandWidth: number;
   };
-  bubbleSignals: Array<{ 
-    price: number; 
-    type: 'BUY' | 'SELL'; 
+  bubbleSignals: Array<{
+    price: number;
+    type: 'BUY' | 'SELL';
     size: string;
     timestamp: Date;
   }>;
@@ -69,26 +69,39 @@ export interface WhaleData {
   timestamp: Date;
 }
 
+// --- SỬA ĐỔI CHÍNH TẠI ĐÂY ---
 export interface DataQualityReport {
-  overall: 'GOOD' | 'DEGRADED' | 'CRITICAL';
-  binance: { 
-    fresh: boolean; 
+  // Đổi từ enum string sang number (Score 0-100)
+  overall: number;
+
+  // Các trường cũ để optional (?) để tránh lỗi nếu logic mới chưa điền đủ
+  binance?: {
+    fresh: boolean;
     lastUpdate: Date;
     latencyMs: number;
   };
-  option: { 
-    fresh: boolean; 
-    lastUpdate: Date | null; 
+  option?: {
+    fresh: boolean;
+    lastUpdate: Date | null;
     available: boolean;
     source: string;
   };
-  whale: { 
-    fresh: boolean; 
-    lastUpdate: Date | null; 
+  whale?: {
+    fresh: boolean;
+    lastUpdate: Date | null;
     available: boolean;
     source: string;
   };
-  issues: string[];
+  issues?: string[];
+
+  // Thêm trường details mới cho logic DataNormalizer
+  details?: {
+    hasPrice: boolean;
+    hasVolume: boolean;
+    hasWhaleData: boolean;
+    hasOptionData: boolean;
+    [key: string]: any;
+  };
 }
 
 export interface DataCollectorConfig {

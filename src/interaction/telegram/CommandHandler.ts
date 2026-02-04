@@ -9,11 +9,11 @@ import { GateEvaluator } from '../../core/gate-evaluator/GateEvaluator';
 import { PermissionStateEngine } from '../../core/permission-engine/PermissionStateEngine';
 import { PermissionAssessment, PermissionState } from '../../types/permission.types';
 import { formatPermissionState, formatGateStatus, formatTimestamp } from '../../utils/formatters';
+import { log } from '../../utils/logger'; // Thêm logger để debug lỗi
 
 /**
  * CommandHandler processes Telegram commands.
- * 
- * Integrates with DataCollector, GateEvaluator, and PermissionStateEngine
+ * * Integrates with DataCollector, GateEvaluator, and PermissionStateEngine
  * for real-time permission state evaluation in response to Telegram commands.
  */
 export class CommandHandler {
@@ -40,11 +40,7 @@ export class CommandHandler {
   /**
    * Handle a command
    */
-  async handle(
-    command: string,
-    args: string[],
-    traderId: string
-  ): Promise<string> {
+  async handle(command: string, args: string[], traderId: string): Promise<string> {
     switch (command) {
       case 'status':
         return this.handleStatus(args[0]);
@@ -89,18 +85,24 @@ Use /status ASSET for detailed assessment.
     }
 
     const upperAsset = asset.toUpperCase();
-    const marketData = this.dataCollector.getData(upperAsset);
-    if (!marketData) {
-      return `No market data available for ${upperAsset}. Try again later.`;
-    }
 
-    // Evaluate gates
-    const gateResult = this.gateEvaluator.evaluate(marketData);
-    // Assess permission state
-    const assessment = this.permissionEngine.assess(upperAsset, gateResult);
+    try {
+      // --- UPDATE START: Sử dụng collect() thay vì getData() ---
+      // Gọi hàm async để lấy dữ liệu mới nhất
+      const marketData = await this.dataCollector.collect(upperAsset);
 
-    // Format response
-    return `
+      if (!marketData) {
+        return `No market data available for ${upperAsset}. Try again later.`;
+      }
+      // --- UPDATE END ---
+
+      // Evaluate gates
+      const gateResult = this.gateEvaluator.evaluate(marketData);
+      // Assess permission state
+      const assessment = this.permissionEngine.assess(upperAsset, gateResult);
+
+      // Format response
+      return `
 ━━━━━━━━━━━━━━━━━━━━━━━
 📊 <b>ASSESSMENT</b>
 ${upperAsset} | ${formatTimestamp(assessment.assessedAt)}
@@ -115,7 +117,7 @@ Flow: ${formatGateStatus(assessment.gateEvaluations.flow.status)}
 Risk: ${formatGateStatus(assessment.gateEvaluations.risk.status)}
 Context: ${formatGateStatus(assessment.gateEvaluations.context.status)}
 
-<b>Conflicts:</b> ${assessment.conflicts.length > 0 ? assessment.conflicts.map(c => c.description).join('; ') : 'None'}
+<b>Conflicts:</b> ${assessment.conflicts.length > 0 ? assessment.conflicts.map((c) => c.description).join('; ') : 'None'}
 
 <b>Explanation:</b>
 ${assessment.explanation.currentObservation}
@@ -124,13 +126,22 @@ ${assessment.explanation.conflictAssessment}
 
 <i>Valid until: ${formatTimestamp(assessment.validUntil)}</i>
 ━━━━━━━━━━━━━━━━━━━━━━━
-    `.trim();
+      `.trim();
+    } catch (error) {
+      log.error(`Failed to handle status for ${upperAsset}`, { error });
+      return `⚠️ Error fetching data for ${upperAsset}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
   }
 
   /**
    * Handle /prepare_reduce and /prepare_close commands
    */
-  private handlePrepare(action: 'REDUCE' | 'CLOSE', asset?: string, size?: string, traderId?: string): string {
+  private handlePrepare(
+    action: 'REDUCE' | 'CLOSE',
+    asset?: string,
+    size?: string,
+    traderId?: string
+  ): string {
     if (!asset) {
       return `To prepare a ${action} order, provide the asset symbol.\nUsage: /prepare_${action.toLowerCase()} ASSET`;
     }
@@ -210,11 +221,7 @@ This is logged for review.
   /**
    * Handle /enable_autoprotect command
    */
-  private handleEnableAutoProtect(
-    asset?: string,
-    action?: string,
-    traderId?: string
-  ): string {
+  private handleEnableAutoProtect(asset?: string, action?: string, traderId?: string): string {
     if (!asset || !action) {
       return 'Usage: /enable_autoprotect ASSET ACTION\nACTION: CLOSE or REDUCE_50';
     }

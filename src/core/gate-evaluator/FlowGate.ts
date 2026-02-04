@@ -269,7 +269,7 @@ export class FlowGate {
     }
 
     // Stale data = LOW confidence
-    if (!data.dataQuality.whale.fresh) {
+    if (!data.dataQuality.whale || !data.dataQuality.whale.fresh) {
       return ConfidenceLevel.LOW;
     }
 
@@ -382,7 +382,12 @@ export class FlowGate {
       return DataFreshness.UNKNOWN;
     }
 
-    return data.dataQuality.whale.fresh ? DataFreshness.CURRENT : DataFreshness.STALE;
+    const whaleQuality = data.dataQuality.whale;
+    if (!whaleQuality) {
+      return DataFreshness.UNKNOWN;
+    }
+
+    return whaleQuality.fresh ? DataFreshness.CURRENT : DataFreshness.STALE;
   }
 
   /**

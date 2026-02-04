@@ -1,13 +1,59 @@
 // src/core/data-collector/DataNormalizer.ts
-// Data normalization and standardization utilities
+import { OptionData, WhaleData, BinanceData, MarketData } from './types';
 
-import { OptionData, WhaleData } from './types';
-
-/**
- * DataNormalizer standardizes data from various sources
- * into consistent formats for gate evaluation
- */
 export class DataNormalizer {
+  /**
+   * Main normalization method: Aggregates all data sources into a single MarketData object
+   */
+  normalize(
+    asset: string,
+    binanceData: BinanceData,
+    whaleData: WhaleData | null,
+    optionData: OptionData | null
+  ): MarketData {
+    // 1. Normalize sub-components
+    // FIX: Sử dụng null thay vì undefined để khớp với interface MarketData
+    const normalizedWhale = whaleData ? this.normalizeWhaleData(whaleData) : null;
+    const normalizedOption = optionData ? this.normalizeOptionData(optionData) : null;
+
+    // 2. Calculate Data Quality Score (0 - 100)
+    const qualityScore = this.calculateDataQuality(binanceData, normalizedWhale, normalizedOption);
+
+    // 3. Construct Final MarketData Object
+    return {
+      asset,
+      price: binanceData.price,
+
+      // Source Data
+      binance: binanceData,
+      whale: normalizedWhale,
+      option: normalizedOption,
+
+      // Metadata
+      timestamp: new Date(),
+      dataQuality: {
+        overall: qualityScore,
+        details: {
+          hasPrice: true,
+          hasVolume: true,
+          hasWhaleData: !!normalizedWhale,
+          hasOptionData: !!normalizedOption,
+        },
+      },
+    };
+  }
+
+  private calculateDataQuality(
+    binance: BinanceData,
+    whale?: WhaleData | null,
+    option?: OptionData | null
+  ): number {
+    let score = 50; // Base score for having Binance data
+    if (whale) score += 30;
+    if (option) score += 20;
+    return score;
+  }
+
   /**
    * Normalize option data to standard format
    */
@@ -25,9 +71,6 @@ export class DataNormalizer {
     };
   }
 
-  /**
-   * Normalize whale data to standard format
-   */
   normalizeWhaleData(data: any): WhaleData {
     return {
       cvdWhale24h: this.normalizeNumber(data.cvdWhale24h, 0),
@@ -43,59 +86,42 @@ export class DataNormalizer {
     };
   }
 
-  /**
-   * Normalize vol stance to enum value
-   */
+  // --- Helper Methods (Private) ---
+
   private normalizeVolStance(value: any): 'LONG_VOL' | 'SHORT_VOL' | 'UNCLEAR' {
     if (!value) return 'UNCLEAR';
-    
-    const normalized = String(value).toUpperCase().replace(/[^A-Z]/g, '');
-    
+    const normalized = String(value)
+      .toUpperCase()
+      .replace(/[^A-Z]/g, '');
     if (normalized.includes('LONG')) return 'LONG_VOL';
     if (normalized.includes('SHORT')) return 'SHORT_VOL';
-    
     return 'UNCLEAR';
   }
 
-  /**
-   * Normalize price range
-   */
   private normalizeRange(range: any): { lower: number; upper: number } | null {
     if (!range) return null;
-    
     const lower = this.normalizeNumber(range.lower ?? range.low ?? range.min, null);
     const upper = this.normalizeNumber(range.upper ?? range.high ?? range.max, null);
-    
     if (lower === null || upper === null) return null;
     if (lower >= upper) return null;
-    
     return { lower, upper };
   }
 
-  /**
-   * Normalize term structure
-   */
   private normalizeTermStructure(value: any): 'CONTANGO' | 'BACKWARDATION' | 'FLAT' | 'UNCLEAR' {
     if (!value) return 'UNCLEAR';
-    
     const normalized = String(value).toUpperCase();
-    
     if (normalized.includes('CONTANGO')) return 'CONTANGO';
-    if (normalized.includes('BACKWARDATION') || normalized.includes('BACKWARD')) return 'BACKWARDATION';
+    if (normalized.includes('BACKWARDATION') || normalized.includes('BACKWARD'))
+      return 'BACKWARDATION';
     if (normalized.includes('FLAT')) return 'FLAT';
-    
     return 'UNCLEAR';
   }
 
-  /**
-   * Normalize expiry data
-   */
   private normalizeExpiries(expiries: any[]): OptionData['keyExpiries'] {
     if (!Array.isArray(expiries)) return [];
-    
     return expiries
-      .filter(e => e && e.date)
-      .map(e => ({
+      .filter((e) => e && e.date)
+      .map((e) => ({
         date: this.normalizeTimestamp(e.date),
         bias: this.normalizeBias(e.bias),
         notional: this.normalizeNotional(e.notional),
@@ -104,20 +130,13 @@ export class DataNormalizer {
       .sort((a, b) => a.date.getTime() - b.date.getTime());
   }
 
-  /**
-   * Normalize bias string
-   */
   private normalizeBias(value: any): string {
     if (!value) return 'NEUTRAL';
     return String(value).toUpperCase();
   }
 
-  /**
-   * Normalize notional to category
-   */
   private normalizeNotional(value: any): string {
     if (!value) return 'UNKNOWN';
-    
     if (typeof value === 'number') {
       if (value >= 1e9) return 'MASSIVE';
       if (value >= 500e6) return 'VERY_LARGE';
@@ -125,18 +144,12 @@ export class DataNormalizer {
       if (value >= 50e6) return 'MODERATE';
       return 'SMALL';
     }
-    
     return String(value).toUpperCase();
   }
 
-  /**
-   * Normalize VWAP bands
-   */
   private normalizeVwapBands(bands: any): WhaleData['vwapBands'] {
     const defaultBands = { lower: 0, upper: 0, bandWidth: 0 };
-    
     if (!bands) return defaultBands;
-    
     return {
       lower: this.normalizeNumber(bands.lower, 0),
       upper: this.normalizeNumber(bands.upper, 0),
@@ -144,15 +157,11 @@ export class DataNormalizer {
     };
   }
 
-  /**
-   * Normalize bubble signals
-   */
   private normalizeBubbles(bubbles: any[]): WhaleData['bubbleSignals'] {
     if (!Array.isArray(bubbles)) return [];
-    
     return bubbles
-      .filter(b => b && b.price)
-      .map(b => ({
+      .filter((b) => b && b.price)
+      .map((b) => ({
         price: this.normalizeNumber(b.price, 0),
         type: this.normalizeBubbleType(b.type ?? b.side),
         size: this.normalizeSize(b.size),
@@ -160,112 +169,37 @@ export class DataNormalizer {
       }));
   }
 
-  /**
-   * Normalize bubble type
-   */
   private normalizeBubbleType(value: any): 'BUY' | 'SELL' {
     if (!value) return 'BUY';
-    
     const normalized = String(value).toUpperCase();
-    
     if (normalized.includes('SELL') || normalized.includes('ASK')) return 'SELL';
     return 'BUY';
   }
 
-  /**
-   * Normalize size label
-   */
   private normalizeSize(value: any): string {
     if (!value) return 'UNKNOWN';
-    
     if (typeof value === 'number') {
       if (value >= 10e6) return 'WHALE';
       if (value >= 1e6) return 'LARGE';
       if (value >= 100e3) return 'MEDIUM';
       return 'SMALL';
     }
-    
     return String(value).toUpperCase();
   }
 
-  /**
-   * Normalize number value
-   */
   private normalizeNumber(value: any, defaultValue: number): number;
   private normalizeNumber(value: any, defaultValue: null): number | null;
   private normalizeNumber(value: any, defaultValue: number | null): number | null {
     if (value === null || value === undefined) return defaultValue;
-    
     const num = typeof value === 'number' ? value : parseFloat(String(value));
-    
     if (isNaN(num) || !isFinite(num)) return defaultValue;
-    
     return num;
   }
 
-  /**
-   * Normalize timestamp to Date
-   */
   private normalizeTimestamp(value: any): Date {
     if (!value) return new Date();
-    
     if (value instanceof Date) return value;
-    
     const date = new Date(value);
     return isNaN(date.getTime()) ? new Date() : date;
-  }
-
-  /**
-   * Calculate flow direction from CVD
-   */
-  calculateFlowDirection(cvd24h: number, cvd7d: number): 'ACCUMULATION' | 'DISTRIBUTION' | 'NEUTRAL' | 'UNCLEAR' {
-    const threshold = 0.1; // 10% of typical daily flow
-    
-    // Both positive = accumulation
-    if (cvd24h > 0 && cvd7d > 0) {
-      return 'ACCUMULATION';
-    }
-    
-    // Both negative = distribution
-    if (cvd24h < 0 && cvd7d < 0) {
-      return 'DISTRIBUTION';
-    }
-    
-    // Conflicting signals
-    if ((cvd24h > 0 && cvd7d < 0) || (cvd24h < 0 && cvd7d > 0)) {
-      // If magnitudes are similar, it's unclear
-      const ratio = Math.abs(cvd24h / cvd7d);
-      if (ratio > 0.5 && ratio < 2) {
-        return 'UNCLEAR';
-      }
-      // Otherwise, follow the 7D trend
-      return cvd7d > 0 ? 'ACCUMULATION' : 'DISTRIBUTION';
-    }
-    
-    return 'NEUTRAL';
-  }
-
-  /**
-   * Determine price position relative to comfort range
-   */
-  determinePricePosition(
-    price: number,
-    comfortRange: { lower: number; upper: number } | null
-  ): 'INSIDE_COMFORT' | 'AT_BOUNDARY' | 'IN_STRESS' | 'UNKNOWN' {
-    if (!comfortRange) return 'UNKNOWN';
-    
-    const { lower, upper } = comfortRange;
-    const rangeWidth = upper - lower;
-    const boundaryThreshold = rangeWidth * 0.1; // 10% of range
-    
-    if (price < lower || price > upper) {
-      return 'IN_STRESS';
-    }
-    
-    if (price < lower + boundaryThreshold || price > upper - boundaryThreshold) {
-      return 'AT_BOUNDARY';
-    }
-    
-    return 'INSIDE_COMFORT';
   }
 }

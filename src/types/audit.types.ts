@@ -1,52 +1,52 @@
 // src/types/audit.types.ts
-// Type definitions for audit logging
+// Audit log type definitions
 
-import { PermissionAssessment, PermissionState } from './permission.types';
-import { GateEvaluationResult } from './gates.types';
-import { OrderStatus } from './order.types';
-
-export interface BaseAuditEntry {
-  timestamp: Date;
-  entryId?: string;
-}
-
-export interface SystemEventLog extends BaseAuditEntry {
+export interface SystemEventLog {
   type: 'SYSTEM_EVENT';
+  entryId: string;
   eventType: string;
-  details: Record<string, unknown>;
+  details: any;
+  timestamp: Date;
 }
 
-export interface GateEvaluationLog extends BaseAuditEntry {
+export interface GateEvaluationLog {
   type: 'GATE_EVALUATION';
+  entryId: string;
   asset: string;
-  result: GateEvaluationResult;
+  result: any;
   dataQuality: {
-    overall: string;
-    binance: { fresh: boolean };
-    option: { fresh: boolean; available: boolean };
-    whale: { fresh: boolean; available: boolean };
+    overall: number;
+    binance?: { fresh: boolean };
+    option?: { fresh: boolean; available: boolean };
+    whale?: { fresh: boolean; available: boolean };
   };
+  timestamp: Date;
 }
 
-export interface TraderActionLog extends BaseAuditEntry {
+export interface TraderActionLog {
   type: 'TRADER_ACTION';
+  entryId: string;
   actionType: string;
   traderId: string;
-  asset?: string;
-  details: Record<string, unknown>;
+  asset: string;
+  details: any;
+  timestamp: Date;
 }
 
-export interface OverrideLog extends BaseAuditEntry {
+export interface OverrideLog {
   type: 'OVERRIDE';
-  level: 'LEVEL_1' | 'LEVEL_2' | 'LEVEL_3';
+  entryId: string;
+  level: string;
   asset: string;
   reason: string;
   traderId: string;
-  assessmentAtOverride: PermissionAssessment;
+  assessmentAtOverride: any;
+  timestamp: Date;
 }
 
-export interface ExecutionLog extends BaseAuditEntry {
+export interface ExecutionLog {
   type: 'EXECUTION';
+  entryId: string;
   orderId: string;
   asset: string;
   action: string;
@@ -56,35 +56,43 @@ export interface ExecutionLog extends BaseAuditEntry {
   fillSize?: number;
   failureReason?: string;
   blockedBy?: string;
+  timestamp: Date;
 }
 
-export interface AutoProtectLog extends BaseAuditEntry {
+export interface AutoProtectLog {
   type: 'AUTO_PROTECT';
+  entryId: string;
   status: 'TRIGGERED' | 'EXECUTED' | 'FAILED';
   asset: string;
   action: string;
   triggerReason?: string;
+  error?: string;
   exchangeOrderId?: string;
   fillPrice?: number;
-  error?: string;
+  timestamp: Date;
 }
 
-export interface SecurityEventLog extends BaseAuditEntry {
+export interface SecurityEventLog {
   type: 'SECURITY_EVENT';
+  entryId: string;
   eventType: string;
-  userId?: string;
-  details: Record<string, unknown>;
+  userId: string;
+  details: any;
+  timestamp: Date;
 }
 
-export interface Tier1ViolationLog extends BaseAuditEntry {
+export interface Tier1ViolationLog {
   type: 'TIER1_VIOLATION';
+  entryId: string;
   violationType: string;
   reason: string;
-  asset?: string;
-  details: Record<string, unknown>;
+  asset: string;
+  details: any;
+  timestamp: Date;
 }
 
-export type AuditLogEntry = 
+// Aggregate type for all audit log entries
+export type AuditLogEntry =
   | SystemEventLog
   | GateEvaluationLog
   | TraderActionLog

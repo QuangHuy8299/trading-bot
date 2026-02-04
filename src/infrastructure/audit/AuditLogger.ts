@@ -19,9 +19,9 @@ const { combine, timestamp, json, printf } = format;
 
 /**
  * AuditLogger provides comprehensive logging for all system activities.
- * 
+ *
  * Per Phase 3.5 §4: All system outputs and trader actions must be logged.
- * 
+ *
  * Log Types:
  * - System Events: Startup, shutdown, configuration changes
  * - Gate Evaluations: All gate assessment results
@@ -40,10 +40,7 @@ export class AuditLogger {
     // Application logger (general logs)
     this.appLogger = createLogger({
       level: env.LOG_LEVEL,
-      format: combine(
-        timestamp(),
-        json()
-      ),
+      format: combine(timestamp(), json()),
       transports: [
         new transports.Console({
           format: combine(
@@ -55,12 +52,12 @@ export class AuditLogger {
             })
           ),
         }),
-        new transports.File({ 
+        new transports.File({
           filename: 'logs/app.log',
           maxsize: 10 * 1024 * 1024, // 10MB
           maxFiles: 5,
         }),
-        new transports.File({ 
+        new transports.File({
           filename: 'logs/error.log',
           level: 'error',
           maxsize: 10 * 1024 * 1024,
@@ -72,12 +69,9 @@ export class AuditLogger {
     // Audit logger (immutable audit trail)
     this.auditLogger = createLogger({
       level: 'info',
-      format: combine(
-        timestamp(),
-        json()
-      ),
+      format: combine(timestamp(), json()),
       transports: [
-        new transports.File({ 
+        new transports.File({
           filename: 'logs/audit.log',
           options: { flags: 'a' }, // Append only
           maxsize: 50 * 1024 * 1024, // 50MB
@@ -99,7 +93,7 @@ export class AuditLogger {
       details: entry.details,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.info('SYSTEM_EVENT', log);
     this.appLogger.info(`System Event: ${entry.eventType}`, entry.details);
   }
@@ -117,7 +111,7 @@ export class AuditLogger {
       dataQuality: entry.dataQuality,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.info('GATE_EVALUATION', log);
     this.appLogger.debug(`Gate Evaluation: ${entry.asset}`, {
       regime: entry.result.regime.status,
@@ -141,7 +135,7 @@ export class AuditLogger {
       details: entry.details,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.info('TRADER_ACTION', log);
     this.appLogger.info(`Trader Action: ${entry.actionType}`, {
       traderId: entry.traderId,
@@ -164,7 +158,7 @@ export class AuditLogger {
       assessmentAtOverride: entry.assessmentAtOverride,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.warn('OVERRIDE', log);
     this.appLogger.warn(`Override: Level ${entry.level}`, {
       asset: entry.asset,
@@ -193,7 +187,7 @@ export class AuditLogger {
       status: 'ATTEMPT',
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.info('EXECUTION_ATTEMPT', log);
     this.appLogger.info(`Execution Attempt: ${entry.asset}`, {
       orderId: entry.orderId,
@@ -221,7 +215,7 @@ export class AuditLogger {
       fillSize: entry.fillSize ?? undefined,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.info('EXECUTION_SUCCESS', log);
     this.appLogger.info(`Execution Success: ${entry.orderId}`, {
       exchangeOrderId: entry.exchangeOrderId,
@@ -229,11 +223,7 @@ export class AuditLogger {
     });
   }
 
-  logExecutionFailure(entry: {
-    orderId: string;
-    error: string;
-    timestamp: Date;
-  }): void {
+  logExecutionFailure(entry: { orderId: string; error: string; timestamp: Date }): void {
     const log: ExecutionLog = {
       type: 'EXECUTION',
       entryId: uuidv4(),
@@ -244,7 +234,7 @@ export class AuditLogger {
       failureReason: entry.error,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.error('EXECUTION_FAILURE', log);
     this.appLogger.error(`Execution Failure: ${entry.orderId}`, { error: entry.error });
   }
@@ -265,7 +255,7 @@ export class AuditLogger {
       blockedBy: entry.reason,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.warn('EXECUTION_BLOCKED', log);
     this.appLogger.warn(`Execution Blocked: ${entry.orderId}`, { reason: entry.reason });
   }
@@ -290,7 +280,7 @@ export class AuditLogger {
       triggerReason: entry.triggerReason,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.warn('AUTO_PROTECT_TRIGGERED', log);
     this.appLogger.warn(`Auto-Protect Triggered: ${entry.asset}`, {
       action: entry.action,
@@ -315,7 +305,7 @@ export class AuditLogger {
       fillPrice: entry.fillPrice ?? undefined,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.info('AUTO_PROTECT_EXECUTED', log);
     this.appLogger.info(`Auto-Protect Executed: ${entry.asset}`, {
       action: entry.action,
@@ -338,7 +328,7 @@ export class AuditLogger {
       error: entry.error,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.error('AUTO_PROTECT_FAILED', log);
     this.appLogger.error(`Auto-Protect Failed: ${entry.asset}`, { error: entry.error });
   }
@@ -356,7 +346,7 @@ export class AuditLogger {
       details: entry.details,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.warn('SECURITY_EVENT', log);
     this.appLogger.warn(`Security Event: ${entry.eventType}`, entry.details);
   }
@@ -375,7 +365,7 @@ export class AuditLogger {
       details: entry.details,
       timestamp: entry.timestamp,
     };
-    
+
     this.auditLogger.error('TIER1_VIOLATION', log);
     this.appLogger.error(`Tier 1 Violation: ${entry.violationType}`, {
       reason: entry.reason,
@@ -383,16 +373,36 @@ export class AuditLogger {
     });
   }
 
+  logDataCollection(entry: {
+    asset: string;
+    sources: { [key: string]: boolean };
+    dataQuality: number;
+    duration: number;
+  }): void {
+    const log = {
+      type: 'DATA_COLLECTION',
+      entryId: uuidv4(),
+      asset: entry.asset,
+      sources: entry.sources,
+      dataQuality: entry.dataQuality,
+      duration: entry.duration,
+      timestamp: new Date(),
+    };
+
+    // Log vào file audit (nếu cần tracking chi tiết) hoặc chỉ debug
+    // Ở đây tôi dùng appLogger debug level để tránh spam audit log quá nhiều
+    this.appLogger.debug(`Data Collection: ${entry.asset}`, {
+      quality: entry.dataQuality,
+      duration: `${entry.duration}ms`,
+      sources: JSON.stringify(entry.sources),
+    });
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // ERROR LOGGING
   // ═══════════════════════════════════════════════════════════════════════════
 
-  logError(entry: {
-    type: string;
-    error: string;
-    timestamp: Date;
-    [key: string]: unknown;
-  }): void {
+  logError(entry: { type: string; error: string; timestamp: Date; [key: string]: unknown }): void {
     // Avoid duplicate 'error' property: spread entry only
     this.appLogger.error(entry.type, { ...entry });
     this.auditLogger.error('ERROR', {
